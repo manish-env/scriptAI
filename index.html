@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>BrandMe AI — Personal Brand Video Creator</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Onboarding Screen -->
+    <div v-if="screen === 'onboard'" class="screen onboard-screen">
+      <div class="onboard-hero">
+        <div class="logo-mark">🎬</div>
+        <h1>BrandMe <span class="accent">AI</span></h1>
+      </div>
+      <div class="onboard-form card">
+        <h2>Let's start with you</h2>
+        <div class="field">
+          <label>Your Name</label>
+          <input v-model="profile.name" type="text" placeholder="e.g. Sarah Johnson" />
+        </div>
+        <div class="field">
+          <label>Your Photo <span class="hint">(we'll create a caricature)</span></label>
+          <div class="photo-upload" @click="triggerPhotoUpload" :class="{ 'has-photo': profile.photoUrl }">
+            <img v-if="profile.photoUrl" :src="profile.photoUrl" class="photo-preview" />
+            <div v-else class="photo-placeholder">
+              <span class="upload-icon">📷</span>
+              <span>Tap to upload photo</span>
+            </div>
+          </div>
+          <input ref="photoInput" type="file" accept="image/*" @change="onPhotoSelected" style="display:none" />
+        </div>
+        <div class="field">
+          <label>Your Niche / Industry</label>
+          <input v-model="profile.niche" type="text" placeholder="e.g. Digital Marketing, Fitness, Finance" />
+        </div>
+        <button class="btn btn-primary btn-full" @click="startChat" :disabled="!canStart">
+          Start Creating ✨
+        </button>
+      </div>
+    </div>
+
+    <!-- Chat Screen -->
+    <div v-if="screen === 'chat'" class="screen chat-screen">
+      <header class="chat-header">
+        <button class="icon-btn" @click="screen = 'onboard'">←</button>
+        <div class="chat-header-info">
+          <div class="avatar-sm">{{ profile.name[0] }}</div>
+          <div>
+            <div class="chat-title">Brand Video Chat</div>
+            <div class="chat-sub">AI Video Strategist</div>
+          </div>
+        </div>
+        <button class="icon-btn" title="New video" @click="clearSession">✦</button>
+        <button class="icon-btn" @click="showVideoPanel = !showVideoPanel" :class="{ active: showVideoPanel }">🎬</button>
+      </header>
+
+      <!-- Video Panel Drawer -->
+      <transition name="slide-down">
+        <div v-if="showVideoPanel" class="video-panel">
+          <div class="video-panel-inner">
+            <div v-if="!videoProject.scenes.length" class="empty-panel">
+              <span>🎞️</span>
+              <p>Chat about your video topic, then say <strong>"create video"</strong> to generate your script & scenes.</p>
+            </div>
+            <div v-else>
+              <div class="panel-header">
+                <span>{{ videoProject.title || 'Untitled Video' }}</span>
+                <button class="btn btn-sm btn-outline" @click="screen = 'preview'">Preview →</button>
+              </div>
+              <div class="scenes-mini">
+                <div v-for="(scene, i) in videoProject.scenes" :key="i" class="scene-mini-card" @click="selectedScene = i; screen = 'preview'">
+                  <div class="scene-num">{{ i + 1 }}</div>
+                  <div class="scene-mini-info">
+                    <div class="scene-mini-title">{{ scene.title }}</div>
+                    <div class="scene-mini-status">
+                      <span v-if="scene.imageUrl" class="status-dot done"></span>
+                      <span v-else-if="scene.generating" class="status-dot loading"></span>
+                      <span v-else class="status-dot pending"></span>
+                      {{ scene.imageUrl ? 'Image ready' : scene.generating ? 'Generating…' : 'Pending' }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <button v-if="allImagesReady" class="btn btn-primary btn-full mt-sm" @click="screen = 'preview'">
+                🎬 Assemble Video
+              </button>
+            </div>
+          </div>
+        </div>
+      </transition>
+
+      <!-- Messages -->
+      <div class="messages-wrap" ref="messagesWrap">
+        <div class="messages">
+          <div v-for="(msg, i) in messages" :key="i" class="msg-row" :class="msg.role">
+            <div class="msg-bubble" :class="msg.role">
+              <div class="msg-text" v-html="renderMarkdown(msg.content)"></div>
+              <div v-if="msg.role === 'assistant' && msg.suggestCreate" class="msg-action">
+                <button class="btn btn-sm btn-primary" @click="triggerVideoCreation">Create My Video 🎬</button>
+              </div>
+            </div>
+          </div>
+          <div v-if="aiTyping" class="msg-row assistant">
+            <div class="msg-bubble assistant typing-indicator">
+              <span></span><span></span><span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Input Bar -->
+      <div class="input-bar">
+        <textarea
+          v-model="inputText"
+          ref="chatInput"
+          placeholder="Ask about your video, share ideas…"
+          rows="1"
+          @keydown.enter.exact.prevent="sendMessage"
+          @input="autoResize"
+        ></textarea>
+        <button class="send-btn" @click="sendMessage" :disabled="!inputText.trim() || aiTyping">
+          <span v-if="aiTyping">⏳</span>
+          <span v-else>➤</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Preview / Video Assembly Screen -->
+    <div v-if="screen === 'preview'" class="screen preview-screen">
+      <header class="chat-header">
+        <button class="icon-btn" @click="screen = 'chat'">←</button>
+        <div class="chat-header-info">
+          <div>
+            <div class="chat-title">{{ videoProject.title || 'Your Video' }}</div>
+            <div class="chat-sub">{{ videoProject.scenes.length }} scenes</div>
+          </div>
+        </div>
+        <button v-if="allImagesReady && !videoUrl" class="btn btn-sm btn-primary" @click="assembleVideo">Render</button>
+      </header>
+
+      <div class="preview-content">
+        <!-- Video player once assembled -->
+        <div v-if="videoUrl" class="video-player-wrap">
+          <video :src="videoUrl" controls class="video-player"></video>
+          <a :href="videoUrl" download="brand-video.mp4" class="btn btn-primary btn-full mt-sm">⬇ Download Video</a>
+        </div>
+
+        <!-- Scene cards -->
+        <div class="scenes-list">
+          <div v-for="(scene, i) in videoProject.scenes" :key="i" class="scene-card" :class="{ selected: selectedScene === i }" @click="selectedScene = i">
+            <div class="scene-card-header">
+              <div class="scene-badge">Scene {{ i + 1 }}</div>
+              <div class="scene-card-title">{{ scene.title }}</div>
+            </div>
+            <div class="scene-image-wrap">
+              <img v-if="scene.imageUrl" :src="scene.imageUrl" class="scene-img" />
+              <div v-else-if="scene.generating" class="scene-img-placeholder generating">
+                <div class="spinner"></div>
+                <span>Generating image…</span>
+              </div>
+              <div v-else class="scene-img-placeholder" @click.stop="generateSceneImage(i)">
+                <span>🖼️</span>
+                <span>Tap to generate</span>
+              </div>
+            </div>
+            <div class="scene-script">
+              <p class="scene-narration">{{ scene.narration }}</p>
+              <div class="scene-meta">
+                <span class="scene-tag">{{ scene.duration }}s</span>
+                <span class="scene-tag">{{ scene.mood }}</span>
+              </div>
+              <div class="scene-prompt-label">Image prompt:</div>
+              <p class="scene-prompt-text">{{ scene.imagePrompt }}</p>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="!allImagesReady && videoProject.scenes.length" class="generate-all-wrap">
+          <button class="btn btn-primary btn-full" @click="generateAllImages" :disabled="generatingAll">
+            {{ generatingAll ? 'Generating Images…' : '🎨 Generate All Scene Images' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <transition name="toast">
+      <div v-if="toast.show" class="toast" :class="toast.type">{{ toast.message }}</div>
+    </transition>
+  </div>
+
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
