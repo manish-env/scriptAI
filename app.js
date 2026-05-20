@@ -352,7 +352,9 @@ IMPORTANT: Respond ONLY with valid JSON, no markdown, no explanation. Format:
 
       const stream = canvas.captureStream(FPS);
       const chunks = [];
-      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9' });
+      const mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4']
+        .find(t => MediaRecorder.isTypeSupported(t)) || '';
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
       recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
 
       recorder.start();
@@ -401,7 +403,7 @@ IMPORTANT: Respond ONLY with valid JSON, no markdown, no explanation. Format:
 
       return new Promise(resolve => {
         recorder.onstop = () => {
-          const blob = new Blob(chunks, { type: 'video/webm' });
+          const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
           resolve(URL.createObjectURL(blob));
         };
       });
