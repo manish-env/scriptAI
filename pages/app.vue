@@ -270,15 +270,24 @@ let persistScenesTimer: ReturnType<typeof setTimeout> | null = null
 function schedulePersistScenes() {
   if (persistScenesTimer) clearTimeout(persistScenesTimer)
   persistScenesTimer = setTimeout(() => {
-    syncScenes(videoProject.scenes.map(s => ({
-      title: s.title,
-      narration: s.narration,
-      imagePrompt: s.framePrompts?.length
-        ? JSON.stringify({ imagePrompt: s.imagePrompt, framePrompts: s.framePrompts })
-        : s.imagePrompt,
-      duration: s.duration,
-      mood: s.mood,
-    })))
+    // Include current R2 image keys from client memory so the server's
+    // DELETE+INSERT never loses them due to a race with a concurrent PATCH.
+    syncScenes(videoProject.scenes.map(s => {
+      const r2Keys = s.frameUrls
+        .filter(u => u.startsWith('/api/assets/'))
+        .map(u => u.replace(/^\/api\/assets\//, ''))
+      return {
+        title: s.title,
+        narration: s.narration,
+        imagePrompt: s.framePrompts?.length
+          ? JSON.stringify({ imagePrompt: s.imagePrompt, framePrompts: s.framePrompts })
+          : s.imagePrompt,
+        duration: s.duration,
+        mood: s.mood,
+        image_key: r2Keys[0] ?? null,
+        frame_keys: r2Keys.length ? JSON.stringify(r2Keys) : null,
+      }
+    }))
   }, 600)
 }
 
@@ -639,6 +648,8 @@ async function applyVideoScript(scriptJson: VideoScriptJson) {
       : s.imagePrompt,
     duration: s.duration,
     mood: s.mood,
+    image_key: null,
+    frame_keys: null,
   })))
   syncMessages([{ role: 'assistant', content: summary }])
 }
