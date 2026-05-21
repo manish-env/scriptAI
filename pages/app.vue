@@ -838,11 +838,11 @@ onMounted(async () => {
 .download-bar { flex-shrink:0; padding:12px 16px; background:var(--bg2); border-bottom:1px solid var(--border); }
 .video-preview-mini { width:100%; border-radius:var(--radius-sm); display:block; max-height:200px; background:#000; }
 .mt-sm { margin-top:12px; }
-.preview-content { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:16px; }
-.scenes-list { display:flex; flex-direction:column; gap:16px; }
+.preview-content { flex:1; overflow-x:auto; overflow-y:hidden; padding:16px; display:flex; flex-direction:column; }
+.scenes-list { display:flex; flex-direction:row; gap:16px; height:100%; align-items:flex-start; }
 
 /* Scene card */
-.scene-card { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+.scene-card { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; flex-shrink:0; width:340px; }
 .scene-card-header { display:flex; align-items:center; gap:10px; padding:14px 16px 10px; flex-wrap:wrap; }
 .scene-badge { background:rgba(124,92,252,0.15); color:var(--accent); border-radius:6px; padding:3px 8px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; flex-shrink:0; }
 .scene-card-title { font-weight:600; font-size:14px; flex:1; }

@@ -7,6 +7,6 @@ export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
 
   return $fetch<unknown>(`https://api.replicate.com/v1/predictions/${id}`, {
-    headers: { 'Authorization': `Token ${apiKey}` },
+    headers: { 'Authorization': `Bearer ${apiKey}` },
   })
 })

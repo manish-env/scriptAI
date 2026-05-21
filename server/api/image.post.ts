@@ -9,7 +9,7 @@ export default defineEventHandler(async (event) => {
   const res = await $fetch<unknown>('https://api.replicate.com/v1/predictions', {
     method: 'POST',
     headers: {
-      'Authorization': `Token ${apiKey}`,
+      'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
     body,
