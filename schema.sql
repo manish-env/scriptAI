@@ -2,13 +2,14 @@
 -- Migration v1
 
 CREATE TABLE IF NOT EXISTS users (
-  id          TEXT PRIMARY KEY,
-  name        TEXT NOT NULL,
-  niche       TEXT,
-  photo_key   TEXT,
-  hero_key    TEXT,
-  created_at  TEXT DEFAULT (datetime('now')),
-  updated_at  TEXT DEFAULT (datetime('now'))
+  id              TEXT PRIMARY KEY,
+  name            TEXT NOT NULL,
+  niche           TEXT,
+  photo_key       TEXT,
+  hero_key        TEXT,
+  eleven_voice_id TEXT,
+  created_at      TEXT DEFAULT (datetime('now')),
+  updated_at      TEXT DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
