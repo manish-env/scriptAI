@@ -1020,16 +1020,29 @@ async function clearProjectMedia() {
   }
 }
 
+function apiErrorMessage(e: unknown) {
+  const err = e as { data?: { message?: string }; statusMessage?: string; message?: string }
+  return err.data?.message || err.statusMessage || err.message || 'Request failed'
+}
+
+async function deleteProjectById(id: string) {
+  try {
+    await $fetch(`/api/sessions/${id}/delete`, { method: 'POST' })
+  } catch {
+    await $fetch(`/api/sessions/${id}`, { method: 'DELETE' })
+  }
+}
+
 async function deleteProject() {
   if (!sessionId.value) return
   if (!confirm('Delete this project permanently? This cannot be undone.')) return
   try {
-    await $fetch(`/api/sessions/${sessionId.value}`, { method: 'DELETE' })
+    await deleteProjectById(sessionId.value)
     localStorage.removeItem('bm_active_session')
     showProjectMenu.value = false
     navigateTo('/projects')
-  } catch {
-    showToastMsg('Could not delete project', 'error')
+  } catch (e: unknown) {
+    showToastMsg(apiErrorMessage(e), 'error')
   }
 }
 

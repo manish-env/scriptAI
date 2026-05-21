@@ -11,10 +11,18 @@ export default defineEventHandler(async (event) => {
   await deleteR2Keys(env.BUCKET, keys)
 
   if (env.DB) {
-    await env.DB.prepare(
-      'UPDATE scenes SET image_key = NULL, frame_keys = NULL WHERE session_id = ?',
-    ).bind(session_id).run()
-    await env.DB.prepare('DELETE FROM assets WHERE session_id = ?').bind(session_id).run()
+    try {
+      await env.DB.prepare(
+        'UPDATE scenes SET image_key = NULL, frame_keys = NULL WHERE session_id = ?',
+      ).bind(session_id).run()
+    } catch {
+      await env.DB.prepare(
+        'UPDATE scenes SET image_key = NULL WHERE session_id = ?',
+      ).bind(session_id).run()
+    }
+    try {
+      await env.DB.prepare('DELETE FROM assets WHERE session_id = ?').bind(session_id).run()
+    } catch { /* ignore */ }
   }
 
   return { ok: true, cleared: keys.length }

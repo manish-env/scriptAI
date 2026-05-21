@@ -1,4 +1,4 @@
-import { deleteR2Keys, gatherSessionAssetKeys } from '../../utils/sessionAssets'
+import { deleteSessionRecords } from '../../utils/sessionAssets'
 
 interface Env { DB: D1Database; BUCKET: R2Bucket }
 
@@ -7,17 +7,7 @@ export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')!
 
   if (event.method === 'DELETE') {
-    const keys = await gatherSessionAssetKeys(env, id)
-    await deleteR2Keys(env.BUCKET, keys)
-    if (env.DB) {
-      await env.DB.batch([
-        env.DB.prepare('DELETE FROM messages WHERE session_id = ?').bind(id),
-        env.DB.prepare('DELETE FROM scenes WHERE session_id = ?').bind(id),
-        env.DB.prepare('DELETE FROM assets WHERE session_id = ?').bind(id),
-        env.DB.prepare('DELETE FROM sessions WHERE id = ?').bind(id),
-      ])
-    }
-    return { ok: true }
+    return deleteSessionRecords(env, id)
   }
 
   if (event.method === 'GET') {
@@ -34,7 +24,7 @@ export default defineEventHandler(async (event) => {
   if (event.method === 'PATCH') {
     const { title, topic } = await readBody(event)
     if (env.DB) await env.DB.prepare(
-      `UPDATE sessions SET title = ?, topic = ?, updated_at = datetime('now') WHERE id = ?`
+      `UPDATE sessions SET title = ?, topic = ?, updated_at = datetime('now') WHERE id = ?`,
     ).bind(title ?? null, topic ?? null, id).run()
     return { ok: true }
   }

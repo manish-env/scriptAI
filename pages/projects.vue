@@ -65,18 +65,31 @@ async function clearProjectMedia(id: string, title: string | null) {
   setTimeout(() => { toast.value = '' }, 3000)
 }
 
+function apiErrorMessage(e: unknown) {
+  const err = e as { data?: { message?: string }; statusMessage?: string; message?: string }
+  return err.data?.message || err.statusMessage || err.message || 'Request failed'
+}
+
+async function deleteProjectById(id: string) {
+  try {
+    await $fetch(`/api/sessions/${id}/delete`, { method: 'POST' })
+  } catch {
+    await $fetch(`/api/sessions/${id}`, { method: 'DELETE' })
+  }
+}
+
 async function deleteProject(id: string, title: string | null) {
   if (!confirm(`Delete "${title || 'Untitled'}" permanently?`)) return
   try {
-    await $fetch(`/api/sessions/${id}`, { method: 'DELETE' })
+    await deleteProjectById(id)
     projects.value = projects.value.filter(p => p.id !== id)
     if (localStorage.getItem('bm_active_session') === id) {
       localStorage.removeItem('bm_active_session')
     }
     openMenuId.value = null
     toast.value = 'Project deleted'
-  } catch {
-    toast.value = 'Could not delete project'
+  } catch (e: unknown) {
+    toast.value = apiErrorMessage(e)
   }
   setTimeout(() => { toast.value = '' }, 3000)
 }

@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS assets (
   id          TEXT PRIMARY KEY,
   user_id     TEXT NOT NULL REFERENCES users(id),
   session_id  TEXT REFERENCES sessions(id),
-  type        TEXT NOT NULL CHECK(type IN ('photo','scene_image','video')),
+  type        TEXT NOT NULL CHECK(type IN ('photo','hero','scene_image','video')),
   r2_key      TEXT NOT NULL UNIQUE,
   size        INTEGER,
   created_at  TEXT DEFAULT (datetime('now'))
