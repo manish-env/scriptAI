@@ -20,6 +20,7 @@ createApp({
     const photoInput = ref(null);
     const chatInput = ref(null);
     const messagesWrap = ref(null);
+    const previewContent = ref(null);
 
     const profile = reactive({ name: '', niche: '', photoUrl: null, photoBase64: null });
     const messages = ref([]);
@@ -337,6 +338,7 @@ IMPORTANT: Respond ONLY with valid JSON, no markdown, no explanation. Format:
         const url = await buildVideoFromImages(videoProject.scenes);
         videoUrl.value = url;
         showToast('Video ready!');
+        nextTick(() => { if (previewContent.value) previewContent.value.scrollTop = 0; });
       } catch (err) {
         showToast('Video assembly failed: ' + err.message, 'error');
       }
@@ -525,7 +527,7 @@ IMPORTANT: Respond ONLY with valid JSON, no markdown, no explanation. Format:
 
     return {
       screen, showVideoPanel, aiTyping, generatingAll,
-      videoUrl, selectedScene, inputText, photoInput, chatInput, messagesWrap,
+      videoUrl, selectedScene, inputText, photoInput, chatInput, messagesWrap, previewContent,
       profile, messages, toast, videoProject,
       canStart, allImagesReady,
       triggerPhotoUpload, onPhotoSelected, startChat, clearSession,

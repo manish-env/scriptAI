@@ -140,12 +140,13 @@
         <button v-if="allImagesReady && !videoUrl" class="btn btn-sm btn-primary" @click="assembleVideo">Render</button>
       </header>
 
-      <div class="preview-content">
-        <!-- Video player once assembled -->
-        <div v-if="videoUrl" class="video-player-wrap">
-          <video :src="videoUrl" controls class="video-player"></video>
-          <a :href="videoUrl" download="brand-video.mp4" class="btn btn-primary btn-full mt-sm">⬇ Download Video</a>
-        </div>
+      <!-- Sticky download bar — always visible once video is ready -->
+      <div v-if="videoUrl" class="download-bar">
+        <video :src="videoUrl" controls class="video-preview-mini"></video>
+        <a :href="videoUrl" download="brand-video.webm" class="btn btn-primary btn-full mt-sm">⬇ Download Video</a>
+      </div>
+
+      <div class="preview-content" ref="previewContent">
 
         <!-- Scene cards -->
         <div class="scenes-list">
