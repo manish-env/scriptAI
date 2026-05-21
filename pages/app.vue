@@ -1265,7 +1265,16 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
   const sceneImages = await Promise.all(
     scenes.map(s => Promise.all(sceneFrameUrls(s).map(url => loadImage(url)))),
   )
-  const sceneDurationsSec = scenes.map(s => sceneDurationSeconds(s))
+  // Scene duration is narration-driven: ensure audio always fits without speed adjustment.
+  // If narration is longer than the user-set duration we expand the scene; never shrink.
+  const sceneDurationsSec = scenes.map((s, si) => {
+    const buf = narrationBuffers[si]
+    if (buf && buf.duration > 0.5) {
+      const needed = Math.ceil(buf.duration + 0.6)  // 0.6s breathing room after narration
+      return Math.min(MAX_SCENE_DURATION, Math.max(sceneDurationSeconds(s), needed))
+    }
+    return sceneDurationSeconds(s)
+  })
 
   const canvas = document.createElement('canvas')
   canvas.width = W
@@ -1312,17 +1321,25 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
   recorder.start(100)
   if (hasNarration && audioCtx) await sleep(80)
 
-  // Fire each scene's audio at the exact moment its content frames begin rendering
-  // (after the crossfade) so audio and video stay in sync regardless of render speed.
-  function startSceneAudio(si: number, contentDurationSec: number) {
-    if (!audioCtx || !audioDest) return
-    const buf = narrationBuffers[si]
-    if (!buf || buf.duration < 0.05) return
-    const src = audioCtx.createBufferSource()
-    src.buffer = buf
-    if (buf.duration > contentDurationSec) src.playbackRate.value = buf.duration / contentDurationSec
-    src.connect(audioDest)
-    src.start(audioCtx.currentTime)
+  // Pre-schedule ALL narration clips at absolute AudioContext times before the render loop.
+  // This ties audio to the AudioContext clock (accurate, monotonic) rather than the render
+  // loop's execution speed (variable), eliminating cumulative drift across scenes.
+  // Scene durations were already expanded above so every clip plays at 1x speed.
+  if (hasNarration && audioCtx && audioDest) {
+    const recordAudioStart = audioCtx.currentTime
+    let cumFrames = 0
+    for (let si = 0; si < scenes.length; si++) {
+      const totalFrames = Math.max(FPS * 2, Math.floor(sceneDurationsSec[si] * FPS))
+      const contentStartFrame = si > 0 ? cumFrames + CROSSFADE_FRAMES : cumFrames
+      const buf = narrationBuffers[si]
+      if (buf && buf.duration > 0.05) {
+        const src = audioCtx.createBufferSource()
+        src.buffer = buf
+        src.connect(audioDest)
+        src.start(Math.max(audioCtx.currentTime, recordAudioStart + contentStartFrame / FPS))
+      }
+      cumFrames += totalFrames
+    }
   }
 
   for (let si = 0; si < scenes.length; si++) {
@@ -1333,7 +1350,7 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
     const totalFrames = Math.max(FPS * 2, Math.floor(sceneDurationsSec[si] * FPS))
     const hasCrossfade = si > 0
 
-    // Step 1: crossfade transition from previous scene
+    // Crossfade transition from previous scene
     if (hasCrossfade) {
       const prevImgs = sceneImages[si - 1]
       const prevImg = prevImgs[prevImgs.length - 1] ?? imgs[0]
@@ -1351,11 +1368,9 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
       }
     }
 
-    // Step 2: fire narration exactly when scene content starts
     const contentFrames = hasCrossfade ? totalFrames - CROSSFADE_FRAMES : totalFrames
-    startSceneAudio(si, contentFrames / FPS)
 
-    // Step 3: render scene content frames
+    // Render scene content frames
     if (imgs.length >= FRAMES_PER_SCENE) {
       await renderSceneFlipbook(ctx, scene, imgs, W, H, FPS, contentFrames, videoStream, hasCrossfade ? CROSSFADE_FRAMES : 0)
     } else {

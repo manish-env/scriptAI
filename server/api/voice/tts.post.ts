@@ -23,7 +23,13 @@ export default defineEventHandler(async (event) => {
     body: JSON.stringify({
       text: body.text.trim(),
       model_id: 'eleven_multilingual_v2',
-      voice_settings: { stability: 0.45, similarity_boost: 0.85, style: 0, use_speaker_boost: true },
+      voice_settings: {
+        stability: 0.35,          // lower = more expressive / varied intonation
+        similarity_boost: 0.75,
+        style: 0.4,               // key: adds natural emotion — was 0 (fully flat)
+        use_speaker_boost: true,
+        speed: 0.95,              // slightly slower, more natural delivery
+      },
     }),
   })
 
