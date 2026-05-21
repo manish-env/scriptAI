@@ -56,11 +56,81 @@ const canStart = computed(() => profile.name.trim() && profile.niche.trim())
 const allImagesReady = computed(() => videoProject.scenes.length > 0 && videoProject.scenes.every(s => s.imageUrl))
 const totalDuration = computed(() => videoProject.scenes.reduce((sum, s) => sum + (s.duration || 5), 0))
 const selectedSceneIndex = ref(0)
+const timelineTrackRef = ref<HTMLElement | null>(null)
+
+const MIN_SCENE_DURATION = 2
+const MAX_SCENE_DURATION = 45
 
 function timelineWidth(scene: Scene) {
   const total = totalDuration.value || 1
   return `${((scene.duration || 5) / total) * 100}%`
 }
+
+let persistScenesTimer: ReturnType<typeof setTimeout> | null = null
+function schedulePersistScenes() {
+  if (persistScenesTimer) clearTimeout(persistScenesTimer)
+  persistScenesTimer = setTimeout(() => {
+    syncScenes(videoProject.scenes.map(s => ({
+      title: s.title,
+      narration: s.narration,
+      imagePrompt: s.imagePrompt,
+      duration: s.duration,
+      mood: s.mood,
+    })))
+  }, 600)
+}
+
+function setSceneDuration(index: number, seconds: number) {
+  const scene = videoProject.scenes[index]
+  if (!scene) return
+  scene.duration = Math.round(Math.max(MIN_SCENE_DURATION, Math.min(MAX_SCENE_DURATION, seconds)))
+  schedulePersistScenes()
+}
+
+type DurationDrag = { index: number; startX: number; startDuration: number; pxPerSec: number }
+let durationDrag: DurationDrag | null = null
+
+function onDurationResizeStart(e: MouseEvent, index: number) {
+  e.preventDefault()
+  e.stopPropagation()
+  selectedSceneIndex.value = index
+  const track = timelineTrackRef.value
+  const total = totalDuration.value || 1
+  if (!track) return
+  durationDrag = {
+    index,
+    startX: e.clientX,
+    startDuration: videoProject.scenes[index].duration || 5,
+    pxPerSec: track.clientWidth / total,
+  }
+  document.addEventListener('mousemove', onDurationResizeMove)
+  document.addEventListener('mouseup', onDurationResizeEnd)
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+}
+
+function onDurationResizeMove(e: MouseEvent) {
+  if (!durationDrag) return
+  const { index, startX, startDuration, pxPerSec } = durationDrag
+  const scene = videoProject.scenes[index]
+  if (!scene) return
+  const deltaSec = (e.clientX - startX) / pxPerSec
+  scene.duration = Math.round(Math.max(MIN_SCENE_DURATION, Math.min(MAX_SCENE_DURATION, startDuration + deltaSec)))
+}
+
+function onDurationResizeEnd() {
+  if (durationDrag) schedulePersistScenes()
+  durationDrag = null
+  document.removeEventListener('mousemove', onDurationResizeMove)
+  document.removeEventListener('mouseup', onDurationResizeEnd)
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+}
+
+onUnmounted(() => {
+  onDurationResizeEnd()
+  if (persistScenesTimer) clearTimeout(persistScenesTimer)
+})
 
 // ── API helpers ────────────────────────────────────────────────────────────
 async function dbPost(path: string, body: unknown) {
@@ -648,7 +718,7 @@ onMounted(async () => {
           <div ref="previewContent" class="filmstrip-scroll">
             <div class="filmstrip-ruler">
               <span class="ruler-label">Storyboard</span>
-              <span class="ruler-meta">Drag horizontally · click a frame to inspect</span>
+              <span class="ruler-meta">Scroll frames · drag timeline edges to adjust duration</span>
             </div>
             <div class="filmstrip-track">
               <div
@@ -693,7 +763,7 @@ onMounted(async () => {
               <span class="timeline-label"><Icon name="lucide:timer" size="13" /> Timeline</span>
               <span class="timeline-total">{{ totalDuration }}s</span>
             </div>
-            <div class="timeline-track">
+            <div ref="timelineTrackRef" class="timeline-track">
               <div
                 v-for="(scene, i) in videoProject.scenes"
                 :key="'tl-' + i"
@@ -704,9 +774,13 @@ onMounted(async () => {
               >
                 <span class="clip-num">{{ i + 1 }}</span>
                 <span class="clip-dur">{{ scene.duration }}s</span>
+                <div
+                  class="clip-resize-handle"
+                  title="Drag to adjust duration"
+                  @mousedown="onDurationResizeStart($event, i)"
+                />
               </div>
             </div>
-            <div class="timeline-playhead" />
           </div>
 
           <div v-if="videoProject.scenes[selectedSceneIndex]" class="inspector-panel">
@@ -715,9 +789,29 @@ onMounted(async () => {
               <strong>{{ videoProject.scenes[selectedSceneIndex].title }}</strong>
             </div>
             <p class="inspector-narration">{{ videoProject.scenes[selectedSceneIndex].narration }}</p>
+            <div class="inspector-duration">
+              <label class="scene-prompt-label">Duration</label>
+              <div class="duration-controls">
+                <input
+                  type="range"
+                  class="duration-slider"
+                  :min="MIN_SCENE_DURATION"
+                  :max="MAX_SCENE_DURATION"
+                  :value="videoProject.scenes[selectedSceneIndex].duration"
+                  @input="setSceneDuration(selectedSceneIndex, Number(($event.target as HTMLInputElement).value))"
+                />
+                <span class="duration-value">{{ videoProject.scenes[selectedSceneIndex].duration }}s</span>
+              </div>
+            </div>
             <div class="inspector-prompt">
-              <span class="scene-prompt-label">Visual prompt</span>
-              <p class="scene-prompt-text">{{ videoProject.scenes[selectedSceneIndex].imagePrompt }}</p>
+              <label class="scene-prompt-label">Visual prompt</label>
+              <textarea
+                v-model="videoProject.scenes[selectedSceneIndex].imagePrompt"
+                class="inspector-prompt-input"
+                rows="3"
+                placeholder="Describe the illustration for this scene…"
+                @input="schedulePersistScenes"
+              />
             </div>
           </div>
         </div>
@@ -791,15 +885,15 @@ onMounted(async () => {
 }
 
 @media (min-width: 768px) {
-  .app-shell.has-scenes .preview-panel {
-    flex: 1;
-    width: auto;
-    min-width: 0;
-  }
   .app-shell.has-scenes .chat-panel {
-    flex: 0 0 auto;
-    width: min(36vw, 400px);
-    max-width: 400px;
+    flex: 0 0 25%;
+    width: 25%;
+    max-width: none;
+  }
+  .app-shell.has-scenes .preview-panel {
+    flex: 0 0 75%;
+    width: 75%;
+    min-width: 0;
   }
   .mobile-only { display: none !important; }
 }
@@ -1120,23 +1214,44 @@ onMounted(async () => {
 .timeline-total { font-size: 11px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
 .timeline-track {
   display: flex;
-  height: 36px;
-  border-radius: 6px;
+  height: 56px;
+  border-radius: 8px;
   overflow: hidden;
   background: var(--bg3);
   border: 1px solid var(--border);
 }
 .timeline-clip {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
-  min-width: 32px;
+  gap: 4px;
+  min-width: 40px;
   border-right: 1px solid var(--border);
   background: linear-gradient(180deg, rgba(124, 92, 252, 0.12), rgba(124, 92, 252, 0.04));
   cursor: pointer;
   transition: background 0.15s, filter 0.15s;
+}
+.clip-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+  background: linear-gradient(90deg, transparent, rgba(196, 113, 245, 0.35));
+  border-radius: 0 4px 4px 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.timeline-clip:hover .clip-resize-handle,
+.timeline-clip.active .clip-resize-handle {
+  opacity: 1;
+}
+.clip-resize-handle:hover {
+  background: linear-gradient(90deg, transparent, rgba(196, 113, 245, 0.55));
 }
 .timeline-clip:last-child { border-right: none; }
 .timeline-clip:hover { filter: brightness(1.15); }
@@ -1145,28 +1260,58 @@ onMounted(async () => {
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 .timeline-clip.done { background: linear-gradient(180deg, rgba(34, 197, 94, 0.2), rgba(34, 197, 94, 0.06)); }
-.clip-num { font-size: 10px; font-weight: 800; color: var(--text); }
-.clip-dur { font-size: 9px; color: var(--text2); font-variant-numeric: tabular-nums; }
-.timeline-playhead {
-  position: absolute;
-  left: 16px;
-  top: 38px;
-  width: 2px;
-  height: 36px;
-  background: var(--accent2);
-  border-radius: 1px;
-  opacity: 0.5;
-  pointer-events: none;
-}
+.clip-num { font-size: 11px; font-weight: 800; color: var(--text); }
+.clip-dur { font-size: 10px; color: var(--text2); font-variant-numeric: tabular-nums; }
 
 /* Inspector (selected scene detail) */
 .inspector-panel {
   flex-shrink: 0;
-  max-height: 120px;
+  max-height: 200px;
   overflow-y: auto;
-  padding: 10px 16px 12px;
+  padding: 12px 16px 14px;
   background: #111116;
   border-top: 1px solid var(--border);
+}
+.inspector-duration { margin-bottom: 10px; }
+.duration-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+}
+.duration-slider {
+  flex: 1;
+  height: 6px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.duration-value {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  min-width: 32px;
+  text-align: right;
+}
+.inspector-prompt-input {
+  width: 100%;
+  margin-top: 6px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 10px 12px;
+  resize: vertical;
+  min-height: 72px;
+  outline: none;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+.inspector-prompt-input:focus {
+  border-color: var(--accent);
 }
 .inspector-head {
   display: flex;
