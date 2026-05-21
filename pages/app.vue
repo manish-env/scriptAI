@@ -1703,9 +1703,13 @@ onMounted(async () => {
       projectSetup.projectTitle = setup.title
       projectSetup.projectPurpose = setup.purpose
       videoProject.title = setup.title
-      if (setup.photoBase64 && !profile.photoBase64) {
+      if (setup.photoBase64) {
+        // Project-specific photo always wins — character is built from this image,
+        // not the global profile photo, so each project can have its own look.
         profile.photoBase64 = setup.photoBase64
         profile.photoUrl = `data:image/jpeg;base64,${setup.photoBase64}`
+        profile.heroUrl = null
+        profile.heroBase64 = null
       }
     } catch { /* ignore parse errors */ }
     await startNewProjectChat()
