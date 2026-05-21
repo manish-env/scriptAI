@@ -1423,7 +1423,10 @@ onMounted(async () => {
   if (user?.name) {
     profile.name = user.name
     profile.niche = user.niche ?? ''
-    if (user.photo_key) profile.photoUrl = `/api/assets/${user.photo_key}`
+    if (user.photo_key) {
+      profile.photoUrl = `/api/assets/${user.photo_key}`
+      try { profile.photoBase64 = await assetUrlToBase64(profile.photoUrl) } catch { /* lazy load */ }
+    }
     if (user.hero_key) {
       profile.heroUrl = `/api/assets/${user.hero_key}`
       try { profile.heroBase64 = await assetUrlToBase64(profile.heroUrl) } catch { /* lazy load */ }
