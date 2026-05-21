@@ -10,7 +10,9 @@ interface Scene {
   duration: number
   mood: string
   imageUrl: string | null
+  frameUrls: string[]
   generating: boolean
+  generatingLabel: string | null
 }
 
 interface Message {
@@ -23,6 +25,7 @@ interface DbScene {
   id: string; session_id: string; position: number
   title: string; narration: string; image_prompt: string
   duration: number; mood: string; image_key: string | null
+  frame_keys?: string | null
 }
 
 interface DbSession {
@@ -45,16 +48,28 @@ const previewContent = ref<HTMLElement | null>(null)
 const photoInputEl = ref<HTMLInputElement | null>(null)
 const chatInputEl = ref<HTMLTextAreaElement | null>(null)
 
-const profile = reactive({ name: '', niche: '', photoUrl: null as string | null, photoBase64: null as string | null })
+const profile = reactive({
+  name: '',
+  niche: '',
+  photoUrl: null as string | null,
+  photoBase64: null as string | null,
+  heroUrl: null as string | null,
+  heroBase64: null as string | null,
+  characterDescription: '',
+})
 const messages = ref<Message[]>([])
-const videoProject = reactive({ title: '', topic: '', scenes: [] as Scene[] })
+const videoProject = reactive({ title: '', topic: '', characterDescription: '', scenes: [] as Scene[] })
 const userId = ref<string | null>(null)
 const sessionId = ref<string | null>(null)
 const toast = reactive({ show: false, message: '', type: 'success' })
 
 // ── Computed ───────────────────────────────────────────────────────────────
 const canStart = computed(() => profile.name.trim() && profile.niche.trim())
-const allImagesReady = computed(() => videoProject.scenes.length > 0 && videoProject.scenes.every(s => s.imageUrl))
+const FRAMES_PER_SCENE = 3
+const allImagesReady = computed(() =>
+  videoProject.scenes.length > 0
+  && videoProject.scenes.every(s => s.frameUrls.length >= FRAMES_PER_SCENE || !!s.imageUrl),
+)
 const totalDuration = computed(() => videoProject.scenes.reduce((sum, s) => sum + (s.duration || 5), 0))
 const selectedSceneIndex = ref(0)
 const timelineTrackRef = ref<HTMLElement | null>(null)
@@ -166,20 +181,47 @@ function syncScenes(scenes: Scene[]) {
   dbPatch(`/api/sessions/${sessionId.value}`, { title: videoProject.title, topic: videoProject.topic })
 }
 
-async function uploadSceneImage(replicateUrl: string, sceneId?: string) {
-  if (!userId.value || !sessionId.value) return replicateUrl
+async function uploadAsset(replicateUrl: string, type: 'hero' | 'scene_image' | 'photo') {
+  if (!userId.value) return { assetUrl: replicateUrl, key: null as string | null }
   try {
-    const res = await $fetch<{ assetUrl: string; key: string }>('/api/upload', {
-      method: 'POST', body: { url: replicateUrl, type: 'scene_image', user_id: userId.value, session_id: sessionId.value },
+    const res = await $fetch<{ assetUrl: string; key: string | null }>('/api/upload', {
+      method: 'POST',
+      body: { url: replicateUrl, type, user_id: userId.value, session_id: sessionId.value },
     })
-    if (res.assetUrl) {
-      if (sceneId && res.key) {
-        dbPatch(`/api/sessions/${sessionId.value}/scenes`, { scene_id: sceneId, image_key: res.key })
-      }
-      return res.assetUrl
-    }
+    if (res.assetUrl) return res
   } catch { /* fall through */ }
-  return replicateUrl
+  return { assetUrl: replicateUrl, key: null }
+}
+
+async function assetUrlToBase64(url: string) {
+  const res = await fetch(url.startsWith('http') ? url : `${window.location.origin}${url}`)
+  const blob = await res.blob()
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve((reader.result as string).split(',')[1])
+    reader.onerror = reject
+    reader.readAsDataURL(blob)
+  })
+}
+
+function parseFrameKeys(raw: string | null | undefined): string[] {
+  if (!raw) return []
+  try {
+    const keys = JSON.parse(raw) as string[]
+    return Array.isArray(keys) ? keys.map(k => `/api/assets/${k}`) : []
+  } catch {
+    return []
+  }
+}
+
+async function persistSceneFrames(scene: Scene) {
+  if (!scene.id || !sessionId.value || !scene.frameUrls.length) return
+  const keys = scene.frameUrls.map(u => u.replace(/^\/api\/assets\//, ''))
+  await dbPatch(`/api/sessions/${sessionId.value}/scenes`, {
+    scene_id: scene.id,
+    image_key: keys[0],
+    frame_keys: JSON.stringify(keys),
+  })
 }
 
 // ── Load existing session from D1 ──────────────────────────────────────────
@@ -195,16 +237,22 @@ async function loadSession(id: string) {
       content: m.content,
       suggestCreate: false,
     }))
-    videoProject.scenes = data.scenes.map(s => ({
-      id: s.id,
-      title: s.title,
-      narration: s.narration,
-      imagePrompt: s.image_prompt,
-      duration: s.duration,
-      mood: s.mood,
-      imageUrl: s.image_key ? `/api/assets/${s.image_key}` : null,
-      generating: false,
-    }))
+    videoProject.scenes = data.scenes.map((s) => {
+      const frameUrls = parseFrameKeys((s as DbScene & { frame_keys?: string }).frame_keys)
+      const fallback = s.image_key ? `/api/assets/${s.image_key}` : null
+      return {
+        id: s.id,
+        title: s.title,
+        narration: s.narration,
+        imagePrompt: s.image_prompt,
+        duration: s.duration,
+        mood: s.mood,
+        frameUrls: frameUrls.length ? frameUrls : (fallback ? [fallback] : []),
+        imageUrl: frameUrls[0] ?? fallback,
+        generating: false,
+        generatingLabel: null,
+      }
+    })
     if (videoProject.scenes.length) showVideoPanel.value = true
     return true
   } catch {
@@ -223,6 +271,8 @@ function onPhotoSelected(e: Event) {
   reader.onload = ev => {
     profile.photoUrl = ev.target?.result as string
     profile.photoBase64 = (ev.target?.result as string).split(',')[1]
+    profile.heroUrl = null
+    profile.heroBase64 = null
   }
   reader.readAsDataURL(file)
 }
@@ -300,9 +350,17 @@ async function triggerVideoCreation() {
     const scriptJson = await generateVideoScript()
     videoProject.title = scriptJson.title
     videoProject.topic = scriptJson.topic
-    videoProject.scenes = scriptJson.scenes.map((s: Scene) => ({ ...s, imageUrl: null, generating: false }))
+    videoProject.characterDescription = scriptJson.characterDescription ?? ''
+    profile.characterDescription = videoProject.characterDescription
+    videoProject.scenes = scriptJson.scenes.map((s: Scene) => ({
+      ...s,
+      imageUrl: null,
+      frameUrls: [],
+      generating: false,
+      generatingLabel: null,
+    }))
     aiTyping.value = false
-    const summary = `🎬 **Video script created!** "${scriptJson.title}"\n\nI've written **${scriptJson.scenes.length} scenes** for your video:\n${scriptJson.scenes.map((s: Scene, i: number) => `${i + 1}. **${s.title}** — ${s.narration.slice(0, 60)}…`).join('\n')}\n\nTap the **video button** above to see your scenes and generate illustrated images for each one. Ready?`
+    const summary = `🎬 **Video script created!** "${scriptJson.title}"\n\nI've written **${scriptJson.scenes.length} scenes** for your video:\n${scriptJson.scenes.map((s: Scene, i: number) => `${i + 1}. **${s.title}** — ${s.narration.slice(0, 60)}…`).join('\n')}\n\nOpen the storyboard and **Generate** — each scene gets **${FRAMES_PER_SCENE} paper-flip frames** (same face, subtle pose changes) for a stop-motion feel. Ready?`
     messages.value.push({ role: 'assistant', content: summary, suggestCreate: false })
     scrollToBottom()
     syncScenes(scriptJson.scenes)
@@ -319,7 +377,7 @@ The creator is ${profile.name} in the ${profile.niche} niche.
 Based on the conversation, create a compelling short video script (60-90 seconds total, 4-6 scenes).
 
 IMPORTANT: Respond ONLY with valid JSON, no markdown, no explanation. Format:
-{"title":"Video title","topic":"One sentence topic","scenes":[{"title":"Scene title","narration":"Voiceover text (2-3 sentences)","imagePrompt":"Detailed caricature illustration prompt of ${profile.name || 'the creator'} — warm cartoon style. Describe pose, expression, background, action.","duration":15,"mood":"inspiring"}]}`
+{"title":"Video title","topic":"One sentence topic","characterDescription":"Fixed visual description of ${profile.name || 'the creator'} for ALL scenes: face, hair, skin tone, outfit, art style — never change between scenes","scenes":[{"title":"Scene title","narration":"Voiceover text (2-3 sentences)","imagePrompt":"Scene action and background only — do NOT re-describe the face differently each time","duration":15,"mood":"inspiring"}]}`
 
   const msgs = [...buildChatMessages(), { role: 'user', content: 'Based on our conversation, create the video script JSON now. Respond ONLY with the JSON object.' }]
   const raw = await callClaude(msgs, system)
@@ -328,39 +386,118 @@ IMPORTANT: Respond ONLY with valid JSON, no markdown, no explanation. Format:
   return JSON.parse(match[0])
 }
 
-// ── Image Generation ───────────────────────────────────────────────────────
+// ── Image Generation (hero + 3 paper-flip frames per scene) ─────────────────
+const FRAME_POSES = [
+  'neutral relaxed pose, friendly subtle smile, hands relaxed at sides',
+  'expressive explaining gesture, one hand raised, engaged eyes',
+  'warm reaction pose, slight head tilt, confident smile, subtle hand movement',
+]
+
+function buildFramePrompt(scene: Scene, poseIndex: number) {
+  const char = profile.characterDescription
+    || videoProject.characterDescription
+    || `caricature of ${profile.name}, ${profile.niche} creator`
+  return [
+    char,
+    'Same character as reference image, identical face, hair, skin tone, and outfit.',
+    scene.imagePrompt,
+    `Pose only: ${FRAME_POSES[poseIndex]}.`,
+    'Paper-cut flat illustration, soft paper texture edge, warm colors, 16:9.',
+  ].join(' ')
+}
+
+async function ensureHeroCaricature() {
+  if (profile.heroBase64) return
+  if (!profile.photoBase64 && !profile.photoUrl) return
+
+  showToastMsg('Creating your character…')
+  const prompt = [
+    `Professional caricature portrait of ${profile.name}, ${profile.niche} expert,`,
+    'warm friendly cartoon, front-facing, neutral smile, clean soft background,',
+    'paper-cut illustration style, consistent character design, 16:9, high quality',
+  ].join(' ')
+  const replicateUrl = await callReplicate(prompt, { usePhoto: true, strength: 0.55 })
+  const { assetUrl, key } = await uploadAsset(replicateUrl, 'hero')
+  profile.heroUrl = assetUrl
+  profile.heroBase64 = await assetUrlToBase64(assetUrl)
+  if (userId.value) {
+    await dbPost('/api/user', {
+      id: userId.value,
+      name: profile.name,
+      niche: profile.niche,
+      hero_key: key,
+    })
+  }
+}
+
 async function generateAllImages() {
   generatingAll.value = true
-  for (const [i, scene] of videoProject.scenes.entries()) {
-    if (!scene.imageUrl) await generateSceneImage(i)
-  }
-  generatingAll.value = false
-  showToastMsg('All images generated!')
-}
-
-async function generateSceneImage(index: number) {
-  const scene = videoProject.scenes[index]
-  if (scene.imageUrl || scene.generating) return
-  scene.generating = true
   try {
-    const replicateUrl = await callReplicate(scene.imagePrompt)
-    scene.imageUrl = await uploadSceneImage(replicateUrl, scene.id)
-    scene.generating = false
+    await ensureHeroCaricature()
+    for (const [i, scene] of videoProject.scenes.entries()) {
+      if (scene.frameUrls.length < FRAMES_PER_SCENE) await generateSceneFrames(i)
+    }
+    showToastMsg('All scene animations ready!')
   } catch (e: unknown) {
-    scene.generating = false
-    showToastMsg(`Scene ${index + 1}: ${(e as Error).message}`, 'error')
+    showToastMsg((e as Error).message || 'Generation failed', 'error')
+  } finally {
+    generatingAll.value = false
   }
 }
 
-async function callReplicate(prompt: string) {
-  const fullPrompt = `${prompt}, caricature illustration style, digital art, vibrant colors, warm and professional, personal brand, high quality, 16:9 aspect ratio`
+async function generateSceneFrames(index: number) {
+  const scene = videoProject.scenes[index]
+  if (scene.generating || scene.frameUrls.length >= FRAMES_PER_SCENE) return
+  scene.generating = true
+  scene.frameUrls = []
+  scene.imageUrl = null
+  try {
+    await ensureHeroCaricature()
+    if (!profile.heroBase64 && !profile.photoBase64) {
+      throw new Error('Upload a photo first so we can lock your character look')
+    }
+    for (let fi = 0; fi < FRAMES_PER_SCENE; fi++) {
+      scene.generatingLabel = `Frame ${fi + 1}/${FRAMES_PER_SCENE}`
+      const replicateUrl = await callReplicate(buildFramePrompt(scene, fi), { strength: 0.38 })
+      const { assetUrl } = await uploadAsset(replicateUrl, 'scene_image')
+      scene.frameUrls.push(assetUrl)
+      scene.imageUrl = scene.frameUrls[0]
+    }
+    await persistSceneFrames(scene)
+    showToastMsg(`Scene ${index + 1}: ${FRAMES_PER_SCENE} frames ready`)
+  } catch (e: unknown) {
+    showToastMsg(`Scene ${index + 1}: ${(e as Error).message}`, 'error')
+  } finally {
+    scene.generating = false
+    scene.generatingLabel = null
+  }
+}
+
+/** @deprecated use generateSceneFrames */
+async function generateSceneImage(index: number) {
+  return generateSceneFrames(index)
+}
+
+async function callReplicate(prompt: string, opts?: { usePhoto?: boolean; strength?: number }) {
+  const fullPrompt = `${prompt}, caricature illustration style, digital art, vibrant colors, warm professional personal brand, high quality`
   const input: Record<string, unknown> = {
     prompt: fullPrompt,
-    negative_prompt: 'realistic photo, photography, blurry, low quality, nsfw',
-    width: 1280, height: 720, num_outputs: 1,
-    scheduler: 'K_EULER', num_inference_steps: 30, guidance_scale: 7.5,
+    negative_prompt: 'realistic photo, photography, blurry, low quality, different face, different person, nsfw',
+    width: 1280,
+    height: 720,
+    num_outputs: 1,
+    scheduler: 'K_EULER',
+    num_inference_steps: 30,
+    guidance_scale: 7.5,
   }
-  if (profile.photoBase64) { input.image = `data:image/jpeg;base64,${profile.photoBase64}`; input.strength = 0.65 }
+  const ref = opts?.usePhoto
+    ? profile.photoBase64
+    : (profile.heroBase64 || profile.photoBase64)
+  const strength = opts?.strength ?? (profile.heroBase64 ? 0.38 : 0.5)
+  if (ref) {
+    input.image = `data:image/jpeg;base64,${ref}`
+    input.strength = strength
+  }
 
   const res = await $fetch<{ id: string }>('/api/image', {
     method: 'POST',
@@ -385,6 +522,7 @@ const VIDEO_H = 720
 const VIDEO_FPS = 30
 const VIDEO_BITRATE = 10_000_000
 const CROSSFADE_FRAMES = 18
+const FLIP_TRANSITION_FRAMES = 14
 const MOTION_PRESETS = ['zoom-in', 'zoom-out', 'pan-left', 'pan-right', 'drift-up'] as const
 type MotionPreset = typeof MOTION_PRESETS[number]
 
@@ -428,6 +566,42 @@ async function waitVideoFrame(stream: MediaStream, fps: number) {
   await new Promise<void>(r => setTimeout(r, 1000 / fps))
 }
 
+function drawPaperBorder(ctx: CanvasRenderingContext2D, W: number, H: number) {
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)'
+  ctx.lineWidth = 3
+  ctx.strokeRect(10, 10, W - 20, H - 20)
+}
+
+function drawPaperFlipTransition(
+  ctx: CanvasRenderingContext2D,
+  imgA: HTMLImageElement,
+  imgB: HTMLImageElement,
+  blend: number,
+  W: number,
+  H: number,
+  motion: MotionPreset,
+) {
+  ctx.fillStyle = '#f4efe6'
+  ctx.fillRect(0, 0, W, H)
+  if (blend < 0.5) {
+    const t = blend * 2
+    ctx.save()
+    ctx.translate(W / 2, H / 2)
+    ctx.scale(Math.max(0.12, 1 - t * 0.88), 1)
+    ctx.translate(-W / 2, -H / 2)
+    drawSceneFrame(ctx, imgA, W, H, 1, motion, 0)
+    ctx.restore()
+  } else {
+    const t = (blend - 0.5) * 2
+    ctx.save()
+    ctx.translate(W / 2, H / 2)
+    ctx.scale(Math.min(1, t * 0.88 + 0.12), 1)
+    ctx.translate(-W / 2, -H / 2)
+    drawSceneFrame(ctx, imgB, W, H, 0, motion, 0)
+    ctx.restore()
+  }
+}
+
 function drawSceneFrame(
   ctx: CanvasRenderingContext2D,
   img: HTMLImageElement,
@@ -435,9 +609,16 @@ function drawSceneFrame(
   H: number,
   progress: number,
   motion: MotionPreset,
+  wiggle = 0,
 ) {
   ctx.fillStyle = '#050508'
   ctx.fillRect(0, 0, W, H)
+  ctx.save()
+  if (wiggle) {
+    ctx.translate(W / 2, H / 2)
+    ctx.rotate(wiggle)
+    ctx.translate(-W / 2, -H / 2)
+  }
 
   const ir = img.width / img.height
   const cr = W / H
@@ -491,8 +672,55 @@ function drawSceneFrame(
   const y = (H - sh) / 2 + panY
 
   ctx.drawImage(img, x, y, sw, sh)
+  ctx.restore()
   drawVignette(ctx, W, H)
   drawColorGrade(ctx, W, H)
+}
+
+function sceneFrameUrls(scene: Scene): string[] {
+  if (scene.frameUrls.length) return scene.frameUrls
+  if (scene.imageUrl) return [scene.imageUrl]
+  return []
+}
+
+async function renderScenePaperFlip(
+  ctx: CanvasRenderingContext2D,
+  scene: Scene,
+  imgs: HTMLImageElement[],
+  W: number,
+  H: number,
+  FPS: number,
+  totalFrames: number,
+  motion: MotionPreset,
+  stream: MediaStream,
+  startGlobalFrame: number,
+) {
+  const n = imgs.length
+  const flips = FLIP_TRANSITION_FRAMES * Math.max(0, n - 1)
+  const holdFrames = Math.max(FPS, Math.floor((totalFrames - flips) / n))
+  let globalF = startGlobalFrame
+
+  for (let seg = 0; seg < n; seg++) {
+    for (let f = 0; f < holdFrames; f++) {
+      const wiggle = Math.sin(f * 0.14 + seg * 1.2) * 0.016
+      const progress = easeInOutCubic(f / Math.max(holdFrames - 1, 1)) * 0.25 + 0.4
+      drawSceneFrame(ctx, imgs[seg], W, H, progress, motion, wiggle)
+      drawPaperBorder(ctx, W, H)
+      drawSceneOverlays(ctx, scene, W, H, globalF, totalFrames)
+      globalF++
+      await waitVideoFrame(stream, FPS)
+    }
+    if (seg < n - 1) {
+      for (let f = 0; f < FLIP_TRANSITION_FRAMES; f++) {
+        const blend = easeInOutCubic(f / FLIP_TRANSITION_FRAMES)
+        drawPaperFlipTransition(ctx, imgs[seg], imgs[seg + 1], blend, W, H, motion)
+        drawPaperBorder(ctx, W, H)
+        drawSceneOverlays(ctx, scene, W, H, globalF, totalFrames)
+        globalF++
+        await waitVideoFrame(stream, FPS)
+      }
+    }
+  }
 }
 
 function drawVignette(ctx: CanvasRenderingContext2D, W: number, H: number) {
@@ -638,7 +866,9 @@ async function buildVideoFromImages(scenes: Scene[]) {
   const W = VIDEO_W
   const H = VIDEO_H
   const FPS = VIDEO_FPS
-  const images = await Promise.all(scenes.map(s => loadImage(s.imageUrl!)))
+  const sceneImages = await Promise.all(
+    scenes.map(s => Promise.all(sceneFrameUrls(s).map(url => loadImage(url)))),
+  )
 
   const canvas = document.createElement('canvas')
   canvas.width = W
@@ -669,29 +899,51 @@ async function buildVideoFromImages(scenes: Scene[]) {
 
   for (let si = 0; si < scenes.length; si++) {
     const scene = scenes[si]
-    const img = images[si]
+    const imgs = sceneImages[si]
+    if (!imgs.length) continue
     const motion = MOTION_PRESETS[si % MOTION_PRESETS.length]
     const frames = Math.max(FPS * 2, Math.floor((scene.duration || 5) * FPS))
 
-    for (let f = 0; f < frames; f++) {
-      const isCrossfade = si > 0 && f < CROSSFADE_FRAMES
-      if (isCrossfade) {
+    if (si > 0 && imgs.length) {
+      const prevImgs = sceneImages[si - 1]
+      const prevImg = prevImgs[prevImgs.length - 1] ?? imgs[0]
+      for (let f = 0; f < CROSSFADE_FRAMES; f++) {
         const blend = easeInOutCubic(f / CROSSFADE_FRAMES)
         const prevMotion = MOTION_PRESETS[(si - 1) % MOTION_PRESETS.length]
-        drawSceneFrame(ctx, images[si - 1], W, H, 1, prevMotion)
+        drawSceneFrame(ctx, prevImg, W, H, 1, prevMotion, 0)
         ctx.save()
         ctx.globalAlpha = blend
-        drawSceneFrame(ctx, img, W, H, 0, motion)
+        drawSceneFrame(ctx, imgs[0], W, H, 0, motion, 0)
         ctx.restore()
+        drawPaperBorder(ctx, W, H)
         drawSceneOverlays(ctx, scene, W, H, f, frames)
-      } else {
-        const localF = si > 0 ? f - CROSSFADE_FRAMES : f
-        const localTotal = si > 0 ? frames - CROSSFADE_FRAMES : frames
-        const progress = easeInOutCubic(localF / Math.max(localTotal - 1, 1))
-        drawSceneFrame(ctx, img, W, H, progress, motion)
-        drawSceneOverlays(ctx, scene, W, H, f, frames)
+        await waitVideoFrame(stream, FPS)
       }
-      await waitVideoFrame(stream, FPS)
+      const paperFrames = frames - CROSSFADE_FRAMES
+      if (imgs.length >= FRAMES_PER_SCENE) {
+        await renderScenePaperFlip(ctx, scene, imgs, W, H, FPS, paperFrames, motion, stream, CROSSFADE_FRAMES)
+      } else {
+        for (let f = CROSSFADE_FRAMES; f < frames; f++) {
+          const localF = f - CROSSFADE_FRAMES
+          const progress = easeInOutCubic(localF / Math.max(frames - CROSSFADE_FRAMES - 1, 1))
+          const wiggle = Math.sin(f * 0.12) * 0.012
+          drawSceneFrame(ctx, imgs[0], W, H, progress, motion, wiggle)
+          drawPaperBorder(ctx, W, H)
+          drawSceneOverlays(ctx, scene, W, H, f, frames)
+          await waitVideoFrame(stream, FPS)
+        }
+      }
+    } else if (imgs.length >= FRAMES_PER_SCENE) {
+      await renderScenePaperFlip(ctx, scene, imgs, W, H, FPS, frames, motion, stream, 0)
+    } else {
+      for (let f = 0; f < frames; f++) {
+        const progress = easeInOutCubic(f / Math.max(frames - 1, 1))
+        const wiggle = Math.sin(f * 0.12) * 0.012
+        drawSceneFrame(ctx, imgs[0], W, H, progress, motion, wiggle)
+        drawPaperBorder(ctx, W, H)
+        drawSceneOverlays(ctx, scene, W, H, f, frames)
+        await waitVideoFrame(stream, FPS)
+      }
     }
   }
 
@@ -712,7 +964,7 @@ function clearSession() {
   localStorage.removeItem('bm_active_session')
   sessionId.value = null
   messages.value = []
-  videoProject.title = ''; videoProject.topic = ''; videoProject.scenes = []
+  videoProject.title = ''; videoProject.topic = ''; videoProject.characterDescription = ''; videoProject.scenes = []
   videoUrl.value = null; showVideoPanel.value = false
 
   if (profile.name && profile.niche) {
@@ -762,7 +1014,7 @@ onMounted(async () => {
   userId.value = uid
 
   // Load user profile from D1
-  const user = await $fetch<{ id: string; name: string; niche: string; photo_key: string | null } | null>(
+  const user = await $fetch<{ id: string; name: string; niche: string; photo_key: string | null; hero_key?: string | null } | null>(
     `/api/user?id=${uid}`
   ).catch(() => null)
 
@@ -770,6 +1022,10 @@ onMounted(async () => {
     profile.name = user.name
     profile.niche = user.niche ?? ''
     if (user.photo_key) profile.photoUrl = `/api/assets/${user.photo_key}`
+    if (user.hero_key) {
+      profile.heroUrl = `/api/assets/${user.hero_key}`
+      try { profile.heroBase64 = await assetUrlToBase64(profile.heroUrl) } catch { /* lazy load */ }
+    }
   }
 
   // Load existing session if one was set from projects page
@@ -869,8 +1125,8 @@ onMounted(async () => {
                     <div class="scene-mini-info">
                       <div class="scene-mini-title">{{ s.title }}</div>
                       <div class="scene-mini-status">
-                        <span class="status-dot" :class="s.imageUrl ? 'done' : s.generating ? 'loading' : 'pending'" />
-                        {{ s.imageUrl ? 'Ready' : s.generating ? 'Generating…' : 'Pending' }}
+                        <span class="status-dot" :class="s.frameUrls.length >= FRAMES_PER_SCENE ? 'done' : s.generating ? 'loading' : 'pending'" />
+                        {{ s.frameUrls.length >= FRAMES_PER_SCENE ? 'Ready' : s.generating ? 'Generating…' : 'Pending' }}
                       </div>
                     </div>
                   </div>
@@ -938,7 +1194,7 @@ onMounted(async () => {
               @click="generateAllImages"
             >
               <Icon name="lucide:sparkles" size="14" />
-              {{ generatingAll ? 'Generating…' : 'Generate all' }}
+              {{ generatingAll ? 'Generating…' : `Generate all (${FRAMES_PER_SCENE} frames each)` }}
             </button>
             <button v-if="allImagesReady && !videoUrl" class="btn btn-sm btn-primary" :disabled="renderingVideo" @click="assembleVideo">
               <Icon :name="renderingVideo ? 'lucide:loader' : 'lucide:film'" size="14" :class="{ spin: renderingVideo }" />
@@ -970,27 +1226,43 @@ onMounted(async () => {
                 v-for="(scene, i) in videoProject.scenes"
                 :key="i"
                 class="storyboard-frame"
-                :class="{ active: selectedSceneIndex === i, done: scene.imageUrl, loading: scene.generating }"
+                :class="{ active: selectedSceneIndex === i, done: scene.frameUrls.length >= FRAMES_PER_SCENE, loading: scene.generating }"
                 @click="selectedSceneIndex = i"
               >
                 <div class="frame-connector" v-if="i > 0" />
                 <div class="frame-head">
                   <span class="frame-num">{{ String(i + 1).padStart(2, '0') }}</span>
                   <span class="frame-title">{{ scene.title }}</span>
-                  <span class="frame-status" :class="scene.imageUrl ? 'done' : scene.generating ? 'loading' : 'pending'">
+                  <span class="frame-status" :class="scene.frameUrls.length >= FRAMES_PER_SCENE ? 'done' : scene.generating ? 'loading' : 'pending'">
                     <span class="status-dot" />
                   </span>
                 </div>
-                <div class="frame-viewport" @click.stop="!scene.imageUrl && !scene.generating && generateSceneImage(i)">
-                  <img v-if="scene.imageUrl" :src="scene.imageUrl" class="frame-img" alt="" />
+                <div
+                  class="frame-viewport"
+                  @click.stop="scene.frameUrls.length < FRAMES_PER_SCENE && !scene.generating && generateSceneFrames(i)"
+                >
+                  <template v-if="scene.frameUrls.length">
+                    <img :src="scene.frameUrls[scene.frameUrls.length - 1]" class="frame-img" alt="" />
+                    <div class="frame-strip">
+                      <img
+                        v-for="(fu, fi) in scene.frameUrls"
+                        :key="fi"
+                        :src="fu"
+                        class="frame-thumb"
+                        :class="{ active: fi === scene.frameUrls.length - 1 }"
+                        alt=""
+                      />
+                    </div>
+                  </template>
                   <div v-else-if="scene.generating" class="frame-placeholder">
-                    <div class="spinner" /><span>Rendering…</span>
+                    <div class="spinner" />
+                    <span>{{ scene.generatingLabel || 'Creating frames…' }}</span>
                   </div>
                   <div v-else class="frame-placeholder clickable">
-                    <Icon name="lucide:image-plus" size="26" />
-                    <span>Generate frame</span>
+                    <Icon name="lucide:layers" size="26" />
+                    <span>Generate {{ FRAMES_PER_SCENE }} frames</span>
                   </div>
-                  <span class="frame-duration">{{ scene.duration }}s</span>
+                  <span class="frame-duration">{{ scene.duration }}s · {{ scene.frameUrls.length || 0 }}/{{ FRAMES_PER_SCENE }}</span>
                 </div>
                 <div class="frame-script-track">
                   <Icon name="lucide:mic" size="12" class="track-icon" />
@@ -1014,7 +1286,7 @@ onMounted(async () => {
                 :key="'tl-' + i"
                 class="timeline-clip"
                 :style="{ flex: `0 0 ${timelineWidth(scene)}` }"
-                :class="{ active: selectedSceneIndex === i, done: scene.imageUrl }"
+                :class="{ active: selectedSceneIndex === i, done: scene.frameUrls.length >= FRAMES_PER_SCENE }"
                 @click="selectedSceneIndex = i"
               >
                 <span class="clip-num">{{ i + 1 }}</span>
@@ -1387,10 +1659,31 @@ onMounted(async () => {
 }
 .frame-placeholder.clickable { cursor: pointer; transition: background 0.2s, color 0.2s; }
 .frame-placeholder.clickable:hover { background: rgba(124, 92, 252, 0.08); color: var(--accent); }
+.frame-strip {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  display: flex;
+  gap: 4px;
+  z-index: 2;
+}
+.frame-thumb {
+  width: 36px;
+  height: 22px;
+  object-fit: cover;
+  border-radius: 3px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  opacity: 0.65;
+}
+.frame-thumb.active {
+  border-color: var(--accent);
+  opacity: 1;
+}
 .frame-duration {
   position: absolute;
   bottom: 6px;
   right: 6px;
+  z-index: 2;
   background: rgba(0, 0, 0, 0.75);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 4px;

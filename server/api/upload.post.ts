@@ -7,7 +7,7 @@ export default defineEventHandler(async (event) => {
   const { url, type, user_id, session_id } = await readBody(event)
 
   if (!url || !type || !user_id) throw createError({ statusCode: 400, message: 'url, type and user_id required' })
-  if (!['photo', 'scene_image', 'video'].includes(type)) throw createError({ statusCode: 400, message: 'invalid type' })
+  if (!['photo', 'hero', 'scene_image', 'video'].includes(type)) throw createError({ statusCode: 400, message: 'invalid type' })
 
   if (!env.BUCKET) {
     return { id: uuid(), key: null, assetUrl: url }

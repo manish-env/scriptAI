@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS users (
   name        TEXT NOT NULL,
   niche       TEXT,
   photo_key   TEXT,
+  hero_key    TEXT,
   created_at  TEXT DEFAULT (datetime('now')),
   updated_at  TEXT DEFAULT (datetime('now'))
 );
@@ -37,6 +38,7 @@ CREATE TABLE IF NOT EXISTS scenes (
   duration     INTEGER DEFAULT 10,
   mood         TEXT,
   image_key    TEXT,
+  frame_keys   TEXT,
   created_at   TEXT DEFAULT (datetime('now'))
 );
 
