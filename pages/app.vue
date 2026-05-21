@@ -186,6 +186,10 @@ const toast = reactive({ show: false, message: '', type: 'success' })
 
 const projectSetup = reactive({ videoType: '', projectTitle: '', projectPurpose: '' })
 
+const sceneVideoUrls = ref<Record<number, string>>({})
+const sceneVideoLoading = ref(-1)
+const sceneVideoModal = ref<{ index: number; url: string } | null>(null)
+
 const VIDEO_TYPE_CONFIG: Record<string, { label: string; persona: string; firstQuestion: string }> = {
   'personal-brand': {
     label: 'Personal Brand Story',
@@ -1419,6 +1423,37 @@ async function restoreImages() {
   }
 }
 
+async function assembleSceneVideo(index: number) {
+  const scene = videoProject.scenes[index]
+  if (!scene || !scene.frameUrls.length) {
+    showToastMsg('Generate images for this scene first', 'error')
+    return
+  }
+  if (sceneVideoLoading.value !== -1) return
+  sceneVideoLoading.value = index
+  showToastMsg(`Scene ${index + 1}: generating voiceover…`)
+  try {
+    let buffers: AudioBuffer[] = []
+    try { buffers = await generateSceneNarration([scene]) } catch { /* narration optional */ }
+    showToastMsg(`Scene ${index + 1}: rendering clip…`)
+    const url = await buildVideoFromImages([scene], buffers)
+    sceneVideoUrls.value = { ...sceneVideoUrls.value, [index]: url }
+    sceneVideoModal.value = { index, url }
+  } catch (e: unknown) {
+    showToastMsg(`Scene ${index + 1}: ${(e as Error).message}`, 'error')
+  } finally {
+    sceneVideoLoading.value = -1
+  }
+}
+
+async function regenerateSceneFrames(index: number) {
+  const scene = videoProject.scenes[index]
+  if (!scene || scene.generating) return
+  scene.frameUrls = []
+  scene.imageUrl = null
+  await generateSceneFrames(index)
+}
+
 function apiErrorMessage(e: unknown) {
   const err = e as { data?: { message?: string }; statusMessage?: string; message?: string }
   return err.data?.message || err.statusMessage || err.message || 'Request failed'
@@ -1829,6 +1864,25 @@ onMounted(async () => {
                 <div class="frame-tags">
                   <span class="scene-tag">{{ scene.mood }}</span>
                 </div>
+                <div class="frame-actions" @click.stop>
+                  <button
+                    class="scene-action-btn"
+                    :disabled="scene.generating || generatingAll || sceneVideoLoading !== -1"
+                    @click="scene.frameUrls.length >= FRAMES_PER_SCENE ? regenerateSceneFrames(i) : generateSceneFrames(i)"
+                  >
+                    <Icon :name="scene.generating ? 'lucide:loader' : 'lucide:image'" size="11" :class="{ spin: scene.generating }" />
+                    {{ scene.generating ? (scene.generatingLabel || 'Generating…') : scene.frameUrls.length >= FRAMES_PER_SCENE ? 'Regenerate' : 'Generate images' }}
+                  </button>
+                  <button
+                    v-if="scene.frameUrls.length"
+                    class="scene-action-btn accent"
+                    :disabled="sceneVideoLoading === i"
+                    @click="assembleSceneVideo(i)"
+                  >
+                    <Icon :name="sceneVideoLoading === i ? 'lucide:loader' : 'lucide:play'" size="11" :class="{ spin: sceneVideoLoading === i }" />
+                    {{ sceneVideoLoading === i ? 'Rendering…' : 'Preview clip' }}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1910,6 +1964,30 @@ onMounted(async () => {
     <Transition name="toast">
       <div v-if="toast.show" class="toast" :class="toast.type">{{ toast.message }}</div>
     </Transition>
+
+    <!-- Per-scene video preview modal -->
+    <Teleport to="body">
+      <Transition name="modal-fade">
+        <div v-if="sceneVideoModal" class="scene-modal-overlay" @click.self="sceneVideoModal = null">
+          <div class="scene-modal">
+            <div class="scene-modal-header">
+              <div>
+                <span class="inspector-badge">Scene {{ sceneVideoModal.index + 1 }}</span>
+                <strong style="margin-left:8px;font-size:14px;">{{ videoProject.scenes[sceneVideoModal.index]?.title }}</strong>
+              </div>
+              <button class="icon-btn" @click="sceneVideoModal = null"><Icon name="lucide:x" size="16" /></button>
+            </div>
+            <video :src="sceneVideoModal.url" controls autoplay loop class="scene-modal-video" />
+            <div class="scene-modal-footer">
+              <a :href="sceneVideoModal.url" :download="`scene-${sceneVideoModal.index + 1}.webm`" class="btn btn-primary" style="flex:1">
+                <Icon name="lucide:download" size="14" /> Download Clip
+              </a>
+              <button class="btn btn-outline" @click="sceneVideoModal = null">Close</button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
 
   </div>
 </template>
@@ -2492,6 +2570,81 @@ onMounted(async () => {
 }
 .scene-prompt-label { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 3px; display: block; }
 .scene-prompt-text { font-size: 11px; color: var(--text2); line-height: 1.45; font-style: italic; }
+
+/* Per-scene action buttons */
+.frame-actions {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.18);
+  border-top: 1px solid var(--border);
+}
+.scene-action-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 8px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text2);
+  font-family: var(--font);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  min-width: 0;
+}
+.scene-action-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: rgba(124, 92, 252, 0.08); }
+.scene-action-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.scene-action-btn.accent { border-color: rgba(124, 92, 252, 0.4); color: var(--accent2); }
+.scene-action-btn.accent:hover:not(:disabled) { background: rgba(196, 113, 245, 0.12); border-color: var(--accent2); }
+
+/* Scene video modal */
+.scene-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.82);
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  backdrop-filter: blur(4px);
+}
+.scene-modal {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  width: 100%;
+  max-width: 720px;
+  overflow: hidden;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.65);
+}
+.scene-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.scene-modal-video {
+  width: 100%;
+  display: block;
+  background: #000;
+  max-height: 420px;
+}
+.scene-modal-footer {
+  display: flex;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+.modal-fade-enter-active, .modal-fade-leave-active { transition: opacity 0.2s ease; }
+.modal-fade-enter-from, .modal-fade-leave-to { opacity: 0; }
 
 .spinner { width: 28px; height: 28px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
 
