@@ -37,3 +37,19 @@ export function getAnthropicApiKey(event: H3Event): string {
   }
   return key
 }
+
+export function getElevenLabsApiKey(event: H3Event): string {
+  const env = cloudflareEnv(event)
+  const config = useRuntimeConfig(event)
+  const key =
+    env.NUXT_ELEVENLABS_API_KEY
+    || env.ELEVENLABS_API_KEY
+    || (config as Record<string, unknown>).elevenLabsApiKey as string | undefined
+  if (!key) {
+    throw createError({
+      statusCode: 500,
+      message: 'ELEVENLABS_API_KEY not configured. Add it to .env, .dev.vars, or Cloudflare Pages secrets.',
+    })
+  }
+  return key
+}

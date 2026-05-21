@@ -177,7 +177,17 @@ const profile = reactive({
   heroUrl: null as string | null,
   heroBase64: null as string | null,
   characterDescription: '',
+  elevenVoiceId: null as string | null,
 })
+
+// ── Voice cloning state ────────────────────────────────────────────────────
+const showVoiceWidget = ref(false)
+const isRecording = ref(false)
+const cloningVoice = ref(false)
+const recordingSeconds = ref(0)
+let mediaRecorderRef: MediaRecorder | null = null
+let audioChunks: BlobPart[] = []
+let recordingTimer: ReturnType<typeof setInterval> | null = null
 const messages = ref<Message[]>([])
 const videoProject = reactive({ title: '', topic: '', characterDescription: '', scenes: [] as Scene[] })
 const userId = ref<string | null>(null)
@@ -874,8 +884,15 @@ async function runKontextEdit(
   return pollReplicate(id)
 }
 
-// ── Narration (TTS via Replicate) ───────────────────────────────────────────
+// ── Narration (TTS — ElevenLabs cloned voice or Replicate fallback) ─────────
 async function callTts(text: string) {
+  if (profile.elevenVoiceId && userId.value) {
+    const res = await $fetch<{ audioUrl: string }>('/api/voice/tts', {
+      method: 'POST',
+      body: { text, voice_id: profile.elevenVoiceId, user_id: userId.value },
+    })
+    return res.audioUrl
+  }
   const res = await $fetch<{ id: string }>('/api/tts', {
     method: 'POST',
     body: { text },
@@ -1454,6 +1471,81 @@ async function regenerateSceneFrames(index: number) {
   await generateSceneFrames(index)
 }
 
+// ── Voice cloning ──────────────────────────────────────────────────────────
+async function startVoiceRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    audioChunks = []
+    mediaRecorderRef = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
+    mediaRecorderRef.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data) }
+    mediaRecorderRef.start(250)
+    isRecording.value = true
+    recordingSeconds.value = 0
+    recordingTimer = setInterval(() => { recordingSeconds.value++ }, 1000)
+  } catch {
+    showToastMsg('Microphone access denied', 'error')
+  }
+}
+
+async function stopVoiceRecording() {
+  if (!mediaRecorderRef) return
+  isRecording.value = false
+  if (recordingTimer) { clearInterval(recordingTimer); recordingTimer = null }
+
+  await new Promise<void>(resolve => {
+    mediaRecorderRef!.onstop = () => resolve()
+    mediaRecorderRef!.stop()
+    mediaRecorderRef!.stream.getTracks().forEach(t => t.stop())
+  })
+
+  if (recordingSeconds.value < 5) {
+    showToastMsg('Recording too short — speak for at least 5 seconds', 'error')
+    return
+  }
+
+  const blob = new Blob(audioChunks, { type: 'audio/webm' })
+  await submitVoiceSample(blob)
+}
+
+async function submitVoiceSample(blob: Blob) {
+  cloningVoice.value = true
+  showToastMsg('Cloning your voice…')
+  try {
+    const reader = new FileReader()
+    const b64 = await new Promise<string>((res, rej) => {
+      reader.onload = () => res(reader.result as string)
+      reader.onerror = rej
+      reader.readAsDataURL(blob)
+    })
+    const data = await $fetch<{ voice_id: string }>('/api/voice/clone', {
+      method: 'POST',
+      body: { audio_base64: b64, user_id: userId.value, name: profile.name || 'My Voice' },
+    })
+    profile.elevenVoiceId = data.voice_id
+    showVoiceWidget.value = false
+    showToastMsg('Voice cloned! Voiceovers will now use your voice.')
+  } catch (e: unknown) {
+    showToastMsg((e as Error).message || 'Voice clone failed', 'error')
+  } finally {
+    cloningVoice.value = false
+  }
+}
+
+async function deleteClonedVoice() {
+  if (!profile.elevenVoiceId || !userId.value) return
+  if (!confirm('Remove your cloned voice? Future voiceovers will use the default AI voice.')) return
+  try {
+    await $fetch('/api/voice/clone', {
+      method: 'DELETE',
+      body: { voice_id: profile.elevenVoiceId, user_id: userId.value },
+    })
+    profile.elevenVoiceId = null
+    showToastMsg('Cloned voice removed')
+  } catch {
+    showToastMsg('Could not remove voice', 'error')
+  }
+}
+
 function apiErrorMessage(e: unknown) {
   const err = e as { data?: { message?: string }; statusMessage?: string; message?: string }
   return err.data?.message || err.statusMessage || err.message || 'Request failed'
@@ -1560,7 +1652,7 @@ onMounted(async () => {
   userId.value = uid
 
   // Load user profile from D1
-  const user = await $fetch<{ id: string; name: string; niche: string; photo_key: string | null; hero_key?: string | null } | null>(
+  const user = await $fetch<{ id: string; name: string; niche: string; photo_key: string | null; hero_key?: string | null; eleven_voice_id?: string | null } | null>(
     `/api/user?id=${uid}`
   ).catch(() => null)
 
@@ -1575,6 +1667,7 @@ onMounted(async () => {
       profile.heroUrl = `/api/assets/${user.hero_key}`
       try { profile.heroBase64 = await assetUrlToBase64(profile.heroUrl) } catch { /* lazy load */ }
     }
+    if (user.eleven_voice_id) profile.elevenVoiceId = user.eleven_voice_id
   }
 
   if (route.query.setup === 'profile') {
@@ -1772,6 +1865,23 @@ onMounted(async () => {
             </div>
           </div>
           <div class="toolbar-actions">
+            <!-- Voice clone badge / record button -->
+            <button
+              v-if="profile.elevenVoiceId"
+              class="btn btn-sm btn-ghost voice-badge"
+              title="Your voice is cloned — click to manage"
+              @click="showVoiceWidget = !showVoiceWidget"
+            >
+              <Icon name="lucide:mic" size="13" class="voice-icon-active" /> My Voice
+            </button>
+            <button
+              v-else
+              class="btn btn-sm btn-ghost"
+              title="Record your voice to use it for all narrations"
+              @click="showVoiceWidget = !showVoiceWidget"
+            >
+              <Icon name="lucide:mic" size="13" /> Clone Voice
+            </button>
             <button
               v-if="sessionId && videoProject.scenes.length && !allImagesReady"
               class="btn btn-sm btn-ghost"
@@ -1795,6 +1905,52 @@ onMounted(async () => {
             </button>
           </div>
         </header>
+
+        <!-- Voice clone widget -->
+        <Transition name="slide-down">
+          <div v-if="showVoiceWidget" class="voice-widget">
+            <div class="voice-widget-inner">
+              <div v-if="profile.elevenVoiceId" class="voice-ready">
+                <div class="voice-ready-icon"><Icon name="lucide:mic" size="20" /></div>
+                <div>
+                  <div class="voice-ready-label">Your voice is cloned</div>
+                  <div class="voice-ready-sub">All voiceovers will use your voice automatically</div>
+                </div>
+                <button class="btn btn-sm btn-ghost" style="margin-left:auto;color:var(--error)" @click="deleteClonedVoice">
+                  <Icon name="lucide:trash-2" size="13" /> Remove
+                </button>
+              </div>
+              <div v-else class="voice-record-ui">
+                <div class="voice-instructions">
+                  <strong>Record 15–60 seconds</strong> of yourself speaking naturally — read anything aloud. Your voice will be cloned using AI and used for all narrations.
+                </div>
+                <div class="voice-controls">
+                  <button
+                    v-if="!isRecording"
+                    class="btn btn-sm btn-primary"
+                    :disabled="cloningVoice"
+                    @click="startVoiceRecording"
+                  >
+                    <Icon name="lucide:mic" size="14" /> Start Recording
+                  </button>
+                  <template v-else>
+                    <div class="recording-indicator">
+                      <span class="rec-dot" />
+                      <span>Recording {{ recordingSeconds }}s</span>
+                    </div>
+                    <button class="btn btn-sm btn-outline" @click="stopVoiceRecording">
+                      <Icon name="lucide:square" size="13" /> Stop & Clone
+                    </button>
+                  </template>
+                  <div v-if="cloningVoice" class="cloning-status">
+                    <div class="spinner" style="width:16px;height:16px;border-width:2px" />
+                    Cloning voice…
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Transition>
 
         <div v-if="videoUrl" class="download-bar">
           <video :src="videoUrl" controls class="video-preview-mini" />
@@ -2570,6 +2726,51 @@ onMounted(async () => {
 }
 .scene-prompt-label { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 3px; display: block; }
 .scene-prompt-text { font-size: 11px; color: var(--text2); line-height: 1.45; font-style: italic; }
+
+/* Voice clone widget */
+.voice-widget {
+  flex-shrink: 0;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+}
+.voice-widget-inner { padding: 14px 16px; }
+.voice-ready {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.voice-ready-icon {
+  width: 40px; height: 40px;
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--success);
+  flex-shrink: 0;
+}
+.voice-ready-label { font-size: 13px; font-weight: 700; color: var(--success); }
+.voice-ready-sub { font-size: 11px; color: var(--text2); margin-top: 2px; }
+.voice-instructions { font-size: 13px; color: var(--text2); line-height: 1.5; margin-bottom: 12px; }
+.voice-instructions strong { color: var(--text); }
+.voice-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.recording-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--error);
+  font-variant-numeric: tabular-nums;
+}
+.rec-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--error);
+  animation: pulse 1s infinite;
+}
+.cloning-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); }
+.voice-badge { color: var(--success) !important; border-color: rgba(34, 197, 94, 0.35) !important; }
+.voice-icon-active { color: var(--success); }
 
 /* Per-scene action buttons */
 .frame-actions {
