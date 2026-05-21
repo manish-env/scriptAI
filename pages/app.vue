@@ -39,6 +39,121 @@ interface DbSession {
   scenes: DbScene[]
 }
 
+interface VideoScriptJson {
+  title?: string
+  topic?: string
+  characterDescription?: string
+  scenes?: Scene[]
+}
+
+// ── LLM JSON helpers (robust parse, hide raw JSON in chat) ───────────────────
+function parseJsonFromLlm(raw: string): VideoScriptJson {
+  let text = raw.trim()
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  if (fence) text = fence[1].trim()
+
+  const start = text.indexOf('{')
+  if (start < 0) throw new Error('No JSON object found in response')
+
+  let depth = 0
+  let inString = false
+  let escape = false
+  let end = -1
+  for (let i = start; i < text.length; i++) {
+    const c = text[i]
+    if (inString) {
+      if (escape) escape = false
+      else if (c === '\\') escape = true
+      else if (c === '"') inString = false
+      continue
+    }
+    if (c === '"') { inString = true; continue }
+    if (c === '{') depth++
+    else if (c === '}') {
+      depth--
+      if (depth === 0) { end = i; break }
+    }
+  }
+  if (end < 0) {
+    throw new SyntaxError('Incomplete JSON — response may have been cut off. Try again.')
+  }
+  return JSON.parse(text.slice(start, end + 1)) as VideoScriptJson
+}
+
+function looksLikeVideoScriptJson(text: string) {
+  const t = text.trim()
+  return (t.startsWith('{') || t.includes('```json') || t.includes('"scenes"'))
+    && /"scenes"\s*:/.test(t)
+}
+
+function formatScriptPreview(script: VideoScriptJson) {
+  const scenes = script.scenes ?? []
+  const lines = scenes.map((s, i) => `${i + 1}. **${s.title}** — ${(s.narration || '').slice(0, 80)}…`)
+  return [
+    `📝 **Script outline** — "${script.title || 'Your video'}"`,
+    '',
+    lines.join('\n') || '_No scenes yet._',
+    '',
+    'Say **"create video"** or tap **Create My Video** to load this into your storyboard.',
+  ].join('\n')
+}
+
+function sanitizeChatReply(text: string) {
+  if (!looksLikeVideoScriptJson(text)) return text
+  try {
+    return formatScriptPreview(parseJsonFromLlm(text))
+  } catch {
+    return text
+      .replace(/```(?:json)?\s*[\s\S]*?```/gi, '\n\n_Script details hidden — use **Create My Video** to open the storyboard._\n\n')
+      .replace(/\{[\s\S]*"scenes"[\s\S]*\}/g, (m) =>
+        m.length > 280 ? '\n\n_Script details hidden — use **Create My Video** to open the storyboard._\n\n' : m,
+      )
+  }
+}
+
+function displayChatContent(msg: Message) {
+  if (msg.role !== 'assistant') return msg.content
+  return sanitizeChatReply(msg.content)
+}
+
+function stripScriptJsonFromContext(text: string) {
+  if (!looksLikeVideoScriptJson(text)) return text
+  try {
+    const script = parseJsonFromLlm(text)
+    return formatScriptPreview(script)
+  } catch {
+    return '[Earlier script draft omitted from context]'
+  }
+}
+
+function buildChatMessagesForScript() {
+  return messages.value.map(m => ({
+    role: m.role,
+    content: m.role === 'assistant' ? stripScriptJsonFromContext(m.content) : m.content,
+  }))
+}
+
+function findScriptInChat(): VideoScriptJson | null {
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    const m = messages.value[i]
+    if (m.role !== 'assistant' || !looksLikeVideoScriptJson(m.content)) continue
+    try {
+      const script = parseJsonFromLlm(m.content)
+      if (script.scenes?.length) return script
+    } catch { /* try older message */ }
+  }
+  return null
+}
+
+async function normalizeScriptScenes(script: VideoScriptJson) {
+  for (const scene of script.scenes ?? []) {
+    if (!hasValidFramePrompts(scene)) {
+      scene.framePrompts = await generateFramePromptsForScene(scene)
+    }
+  }
+  return script
+}
+
 // ── State ──────────────────────────────────────────────────────────────────
 type Screen = 'onboard' | 'chat' | 'preview'
 const screen = ref<Screen>('onboard')
@@ -331,7 +446,8 @@ async function sendMessage() {
   messages.value.push({ role: 'user', content: text })
   scrollToBottom()
 
-  if (/\b(create|make|generate|build)\s+(the\s+)?(video|film|content)\b/i.test(text)) {
+  if (/\b(create|make|generate|build)\b.*\b(video|film|content)\b/i.test(text)
+    || /\b(video|film)\b.*\b(create|make|generate|build)\b/i.test(text)) {
     await triggerVideoCreation()
     return
   }
@@ -339,9 +455,11 @@ async function sendMessage() {
   aiTyping.value = true
   scrollToBottom()
   try {
-    const reply = await callClaude(buildChatMessages())
+    const rawReply = await callClaude(buildChatMessages())
+    const reply = sanitizeChatReply(rawReply)
     aiTyping.value = false
     const suggestCreate = /ready to create|shall i create|want me to create|should i build/i.test(reply)
+      || looksLikeVideoScriptJson(rawReply)
     messages.value.push({ role: 'assistant', content: reply, suggestCreate })
     scrollToBottom()
     syncMessages([{ role: 'user', content: text }, { role: 'assistant', content: reply }])
@@ -355,7 +473,11 @@ function buildChatMessages() {
   return messages.value.map(m => ({ role: m.role, content: m.content }))
 }
 
-async function callClaude(msgs: { role: string; content: string }[], systemOverride?: string) {
+async function callClaude(
+  msgs: { role: string; content: string }[],
+  systemOverride?: string,
+  opts?: { max_tokens?: number },
+) {
   const system = systemOverride || `You are an expert personal brand video strategist and content creator.
 The user is ${profile.name}, working in the ${profile.niche} niche.
 They create personal brand videos WITHOUT showing their face — using illustrated caricature scenes.
@@ -363,19 +485,25 @@ They create personal brand videos WITHOUT showing their face — using illustrat
 VIDEO FORMAT (important):
 - Each video has 4-6 scenes.
 - Each scene becomes ${FRAMES_PER_SCENE} illustrated images (paper-flip): same character, 3 scene-specific pose beats derived from that scene's story.
-- On script creation you write imagePrompt plus framePrompts tailored to each scene's narration (not generic poses).
 
 Your job is to:
 1. Chat naturally; understand their message, audience, and story
-2. Help them craft a compelling video concept
-3. When they have enough info, suggest creating the video
+2. Help them craft a compelling video concept in plain language (scene titles + narration summaries)
+3. When they have enough info, suggest they say "create video" or tap Create My Video
 4. Remember: visuals must keep the SAME character look in every scene
+
+NEVER output raw JSON, code blocks, or script schemas in chat. The app builds the formal script separately when they create the video.
 
 Be concise, warm, and actionable. Use markdown when helpful.`
 
   const data = await $fetch<{ content: { text: string }[] }>('/api/chat', {
     method: 'POST',
-    body: { model: 'claude-opus-4-7', max_tokens: 1500, system, messages: msgs },
+    body: {
+      model: 'claude-opus-4-7',
+      max_tokens: opts?.max_tokens ?? 1500,
+      system,
+      messages: msgs,
+    },
   })
   return data.content[0].text
 }
@@ -387,38 +515,46 @@ async function triggerVideoCreation() {
   scrollToBottom()
   try {
     const scriptJson = await generateVideoScript()
-    videoProject.title = scriptJson.title
-    videoProject.topic = scriptJson.topic
-    videoProject.characterDescription = scriptJson.characterDescription ?? ''
-    profile.characterDescription = videoProject.characterDescription
-    videoProject.scenes = scriptJson.scenes.map((s: Scene) => ({
-      ...s,
-      imageUrl: null,
-      frameUrls: [],
-      generating: false,
-      generatingLabel: null,
-    }))
-    aiTyping.value = false
-    const summary = `🎬 **Video script created!** "${scriptJson.title}"\n\nI've written **${scriptJson.scenes.length} scenes** for your video:\n${scriptJson.scenes.map((s: Scene, i: number) => `${i + 1}. **${s.title}** — ${s.narration.slice(0, 60)}…`).join('\n')}\n\nOpen the storyboard and **Generate** — each scene gets **${FRAMES_PER_SCENE} paper-flip frames** (same face, subtle pose changes) for a stop-motion feel. Ready?`
-    messages.value.push({ role: 'assistant', content: summary, suggestCreate: false })
-    scrollToBottom()
-    syncScenes(videoProject.scenes.map(s => ({
-      title: s.title,
-      narration: s.narration,
-      imagePrompt: s.framePrompts?.length
-        ? JSON.stringify({ imagePrompt: s.imagePrompt, framePrompts: s.framePrompts })
-        : s.imagePrompt,
-      duration: s.duration,
-      mood: s.mood,
-    })))
-    syncMessages([{ role: 'assistant', content: summary }])
+    await applyVideoScript(scriptJson)
   } catch (e: unknown) {
     aiTyping.value = false
     showToastMsg((e as Error).message || 'Script generation failed', 'error')
   }
 }
 
+async function applyVideoScript(scriptJson: VideoScriptJson) {
+  if (!scriptJson.scenes?.length) throw new Error('Script has no scenes')
+  videoProject.title = scriptJson.title ?? 'Untitled Video'
+  videoProject.topic = scriptJson.topic ?? ''
+  videoProject.characterDescription = scriptJson.characterDescription ?? ''
+  profile.characterDescription = videoProject.characterDescription
+  videoProject.scenes = scriptJson.scenes.map((s: Scene) => ({
+    ...s,
+    imageUrl: null,
+    frameUrls: [],
+    generating: false,
+    generatingLabel: null,
+  }))
+  aiTyping.value = false
+  const summary = `🎬 **Video script created!** "${scriptJson.title}"\n\nI've written **${scriptJson.scenes.length} scenes** for your video:\n${scriptJson.scenes.map((s: Scene, i: number) => `${i + 1}. **${s.title}** — ${s.narration.slice(0, 60)}…`).join('\n')}\n\nOpen the storyboard and **Generate** — each scene gets **${FRAMES_PER_SCENE} paper-flip frames** (same face, subtle pose changes) for a stop-motion feel. Ready?`
+  messages.value.push({ role: 'assistant', content: summary, suggestCreate: false })
+  scrollToBottom()
+  syncScenes(videoProject.scenes.map(s => ({
+    title: s.title,
+    narration: s.narration,
+    imagePrompt: s.framePrompts?.length
+      ? JSON.stringify({ imagePrompt: s.imagePrompt, framePrompts: s.framePrompts })
+      : s.imagePrompt,
+    duration: s.duration,
+    mood: s.mood,
+  })))
+  syncMessages([{ role: 'assistant', content: summary }])
+}
+
 async function generateVideoScript() {
+  const fromChat = findScriptInChat()
+  if (fromChat) return normalizeScriptScenes(fromChat)
+
   const system = `You are a professional video script writer for illustrated personal-brand videos.
 Creator: ${profile.name} (${profile.niche} niche).
 Output: short video script, 60-90 seconds total, 4-6 scenes.
@@ -447,17 +583,14 @@ Rules:
 - imagePrompt = shared environment/action; framePrompts = pose, hands, and expression only (no background).
 - Do not describe different people across scenes.`
 
-  const msgs = [...buildChatMessages(), { role: 'user', content: 'Based on our conversation, create the video script JSON now. Respond ONLY with the JSON object.' }]
-  const raw = await callClaude(msgs, system)
-  const match = raw.match(/\{[\s\S]*\}/)
-  if (!match) throw new Error('Could not parse video script')
-  const script = JSON.parse(match[0]) as { scenes?: Scene[] }
-  for (const scene of script.scenes ?? []) {
-    if (!hasValidFramePrompts(scene)) {
-      scene.framePrompts = await generateFramePromptsForScene(scene)
-    }
-  }
-  return script
+  const msgs = [
+    ...buildChatMessagesForScript(),
+    { role: 'user', content: 'Based on our conversation, create the video script JSON now. Respond ONLY with the JSON object, no markdown.' },
+  ]
+  const raw = await callClaude(msgs, system, { max_tokens: 8192 })
+  const script = parseJsonFromLlm(raw)
+  if (!script.scenes?.length) throw new Error('Script has no scenes')
+  return normalizeScriptScenes(script)
 }
 
 // ── Frame prompts (AI per scene, no hardcoded poses) ───────────────────────
@@ -482,9 +615,7 @@ The three beats must follow this scene's narration (opening → emphasis → clo
     }) }],
     system,
   )
-  const match = raw.match(/\{[\s\S]*\}/)
-  if (!match) throw new Error('Could not generate frame prompts')
-  const parsed = JSON.parse(match[0]) as { framePrompts?: unknown }
+  const parsed = parseJsonFromLlm(raw) as { framePrompts?: unknown }
   if (!Array.isArray(parsed.framePrompts) || parsed.framePrompts.length !== FRAMES_PER_SCENE) {
     throw new Error('AI returned invalid frame prompts')
   }
@@ -1327,7 +1458,7 @@ onMounted(async () => {
           <div class="messages">
             <div v-for="(msg, i) in messages" :key="i" class="msg-row" :class="msg.role">
               <div class="msg-bubble" :class="msg.role">
-                <div class="msg-text" v-html="renderMd(msg.content)" />
+                <div class="msg-text" v-html="renderMd(displayChatContent(msg))" />
                 <div v-if="msg.role === 'assistant' && msg.suggestCreate" class="msg-action">
                   <button class="btn btn-sm btn-primary" @click="triggerVideoCreation">
                     <Icon name="lucide:video" size="14" /> Create My Video
