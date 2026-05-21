@@ -147,6 +147,7 @@ function findScriptInChat(): VideoScriptJson | null {
 
 async function normalizeScriptScenes(script: VideoScriptJson) {
   for (const scene of script.scenes ?? []) {
+    scene.duration = clampSceneDuration(scene.duration)
     if (!hasValidFramePrompts(scene)) {
       scene.framePrompts = await generateFramePromptsForScene(scene)
     }
@@ -195,7 +196,11 @@ const selectedSceneIndex = ref(0)
 const timelineTrackRef = ref<HTMLElement | null>(null)
 
 const MIN_SCENE_DURATION = 2
-const MAX_SCENE_DURATION = 45
+const MAX_SCENE_DURATION = 5
+
+function clampSceneDuration(seconds: number) {
+  return Math.round(Math.max(MIN_SCENE_DURATION, Math.min(MAX_SCENE_DURATION, seconds || MAX_SCENE_DURATION)))
+}
 
 function timelineWidth(scene: Scene) {
   const total = totalDuration.value || 1
@@ -221,7 +226,7 @@ function schedulePersistScenes() {
 function setSceneDuration(index: number, seconds: number) {
   const scene = videoProject.scenes[index]
   if (!scene) return
-  scene.duration = Math.round(Math.max(MIN_SCENE_DURATION, Math.min(MAX_SCENE_DURATION, seconds)))
+  scene.duration = clampSceneDuration(seconds)
   schedulePersistScenes()
 }
 
@@ -253,7 +258,7 @@ function onDurationResizeMove(e: MouseEvent) {
   const scene = videoProject.scenes[index]
   if (!scene) return
   const deltaSec = (e.clientX - startX) / pxPerSec
-  scene.duration = Math.round(Math.max(MIN_SCENE_DURATION, Math.min(MAX_SCENE_DURATION, startDuration + deltaSec)))
+  scene.duration = clampSceneDuration(startDuration + deltaSec)
 }
 
 function onDurationResizeEnd() {
@@ -378,7 +383,7 @@ async function loadSession(id: string) {
             narration: s.narration,
             imagePrompt: parsed.imagePrompt,
             framePrompts,
-            duration: s.duration,
+            duration: clampSceneDuration(s.duration),
             mood: s.mood,
             frameUrls: frameUrls.length ? frameUrls : (fallback ? [fallback] : []),
             imageUrl: frameUrls[0] ?? fallback,
@@ -392,7 +397,7 @@ async function loadSession(id: string) {
         title: s.title,
         narration: s.narration,
         imagePrompt: s.image_prompt,
-        duration: s.duration,
+        duration: clampSceneDuration(s.duration),
         mood: s.mood,
         frameUrls: frameUrls.length ? frameUrls : (fallback ? [fallback] : []),
         imageUrl: frameUrls[0] ?? fallback,
@@ -530,6 +535,7 @@ async function applyVideoScript(scriptJson: VideoScriptJson) {
   profile.characterDescription = videoProject.characterDescription
   videoProject.scenes = scriptJson.scenes.map((s: Scene) => ({
     ...s,
+    duration: clampSceneDuration(s.duration),
     imageUrl: null,
     frameUrls: [],
     generating: false,
@@ -557,7 +563,7 @@ async function generateVideoScript() {
 
   const system = `You are a professional video script writer for illustrated personal-brand videos.
 Creator: ${profile.name} (${profile.niche} niche).
-Output: short video script, 60-90 seconds total, 4-6 scenes.
+Output: short video script, 4-6 scenes, max ${MAX_SCENE_DURATION} seconds each (about 20-30 seconds total).
 
 FLIPBOOK MODEL: Each scene = a different location. Within a scene, exactly ${FRAMES_PER_SCENE} flipbook pages share the SAME background; only the character pose changes page to page. characterDescription is identical in every scene; imagePrompt MUST change the environment every scene.
 
@@ -569,16 +575,18 @@ IMPORTANT: Respond ONLY with valid JSON (no markdown). Schema:
   "scenes": [
     {
       "title": "Scene title",
-      "narration": "Voiceover, 2-3 sentences",
+      "narration": "One short voiceover sentence (spoken in under 5 seconds)",
       "imagePrompt": "UNIQUE setting for THIS scene only — specific room/place, background, props, lighting (e.g. busy open-plan office with glass walls). Must differ from other scenes.",
       "framePrompts": ["page 1 pose", "page 2 pose", "page 3 pose"],
-      "duration": 10,
+      "duration": 5,
       "mood": "inspiring"
     }
   ]
 }
 
 Rules:
+- duration MUST be between ${MIN_SCENE_DURATION} and ${MAX_SCENE_DURATION} (integer seconds) for every scene.
+- narration MUST be brief enough to read aloud in under ${MAX_SCENE_DURATION} seconds.
 - Every scene MUST have a clearly different imagePrompt location than every other scene in this video.
 - framePrompts: exactly ${FRAMES_PER_SCENE} strings — character pose/expression only for that scene's story (no background words).
 - imagePrompt = environment for all ${FRAMES_PER_SCENE} pages in that scene; never reuse the same room across scenes unless the story requires it.
@@ -835,10 +843,8 @@ async function generateSceneNarration(scenes: Scene[]) {
   }
 }
 
-function sceneDurationSeconds(scene: Scene, audioSec: number) {
-  const visual = Math.max(MIN_SCENE_DURATION, scene.duration || 5)
-  if (audioSec <= 0) return visual
-  return Math.max(visual, audioSec + 0.35)
+function sceneDurationSeconds(scene: Scene) {
+  return clampSceneDuration(scene.duration)
 }
 
 function pickVideoMimeTypeWithAudio() {
@@ -1181,9 +1187,7 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
     scenes.map(s => Promise.all(sceneFrameUrls(s).map(url => loadImage(url)))),
   )
 
-  const sceneDurationsSec = scenes.map((s, i) =>
-    sceneDurationSeconds(s, narrationBuffers[i]?.duration ?? 0),
-  )
+  const sceneDurationsSec = scenes.map(s => sceneDurationSeconds(s))
 
   const canvas = document.createElement('canvas')
   canvas.width = W
@@ -1210,6 +1214,8 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
       }
       const src = audioCtx.createBufferSource()
       src.buffer = buf
+      const slotSec = sceneDurationsSec[i]
+      if (buf.duration > slotSec) src.playbackRate = buf.duration / slotSec
       src.connect(dest)
       src.start(audioCtx.currentTime + t)
       t += sceneDurationsSec[i]

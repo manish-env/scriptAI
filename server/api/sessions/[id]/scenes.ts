@@ -13,7 +13,7 @@ export default defineEventHandler(async (event) => {
     if (env.DB) {
       await env.DB.prepare('DELETE FROM scenes WHERE session_id = ?').bind(session_id).run()
       const stmt = env.DB.prepare('INSERT INTO scenes (id, session_id, position, title, narration, image_prompt, duration, mood) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      await env.DB.batch(scenes.map((s, i) => stmt.bind(uuid(), session_id, i, s.title, s.narration, s.imagePrompt, s.duration ?? 10, s.mood ?? null)))
+      await env.DB.batch(scenes.map((s, i) => stmt.bind(uuid(), session_id, i, s.title, s.narration, s.imagePrompt, Math.min(5, Math.max(2, s.duration ?? 5)), s.mood ?? null)))
       const { results } = await env.DB.prepare('SELECT * FROM scenes WHERE session_id = ? ORDER BY position ASC').bind(session_id).all()
       return results
     }
