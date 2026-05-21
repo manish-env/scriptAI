@@ -958,8 +958,8 @@ const VIDEO_W = 1280
 const VIDEO_H = 720
 const VIDEO_FPS = 30
 const VIDEO_BITRATE = 10_000_000
-const CROSSFADE_FRAMES = 18
-const FLIPBOOK_PAGE_CUT_FRAMES = 2
+const CROSSFADE_FRAMES = 24          // 0.8s at 30fps — smooth scene-to-scene dissolve
+const FLIPBOOK_PAGE_FADE_FRAMES = 8  // 0.27s crossfade between flipbook pages (was 2-frame hard cut)
 const MOTION_PRESETS = ['zoom-in', 'zoom-out', 'pan-left', 'pan-right', 'drift-up'] as const
 type MotionPreset = typeof MOTION_PRESETS[number]
 
@@ -1021,60 +1021,33 @@ function drawSceneFrame(
   img: HTMLImageElement,
   W: number,
   H: number,
-  progress: number,
+  progress: number, // 0→1 eased, drives Ken Burns
   motion: MotionPreset,
-  wiggle = 0,
 ) {
   ctx.fillStyle = '#050508'
   ctx.fillRect(0, 0, W, H)
-  ctx.save()
-  if (wiggle) {
-    ctx.translate(W / 2, H / 2)
-    ctx.rotate(wiggle)
-    ctx.translate(-W / 2, -H / 2)
-  }
 
   const ir = img.width / img.height
   const cr = W / H
   let dw: number
   let dh: number
-  if (ir > cr) {
-    dh = H
-    dw = H * ir
-  } else {
-    dw = W
-    dh = W / ir
-  }
+  if (ir > cr) { dh = H; dw = H * ir }
+  else { dw = W; dh = W / ir }
 
-  let zoom0 = 1.02
-  let zoom1 = 1.12
+  // Subtle range — 6% zoom / 3% pan so motion is felt not seen
+  let zoom0 = 1.0
+  let zoom1 = 1.06
   let panX0 = 0
   let panX1 = 0
   let panY0 = 0
   let panY1 = 0
 
   switch (motion) {
-    case 'zoom-out':
-      zoom0 = 1.14
-      zoom1 = 1.03
-      break
-    case 'pan-left':
-      panX0 = 0
-      panX1 = -0.06 * dw
-      zoom1 = 1.1
-      break
-    case 'pan-right':
-      panX0 = -0.06 * dw
-      panX1 = 0
-      zoom1 = 1.1
-      break
-    case 'drift-up':
-      panY0 = 0
-      panY1 = -0.04 * dh
-      zoom1 = 1.08
-      break
-    default:
-      zoom1 = 1.13
+    case 'zoom-out':  zoom0 = 1.07; zoom1 = 1.0; break
+    case 'pan-left':  panX1 = -0.03 * dw; zoom0 = 1.01; zoom1 = 1.05; break
+    case 'pan-right': panX0 = -0.03 * dw; zoom0 = 1.01; zoom1 = 1.05; break
+    case 'drift-up':  panY1 = -0.02 * dh; zoom0 = 1.01; zoom1 = 1.05; break
+    default: break // zoom-in: 1.0 → 1.06
   }
 
   const zoom = zoom0 + (zoom1 - zoom0) * progress
@@ -1086,7 +1059,6 @@ function drawSceneFrame(
   const y = (H - sh) / 2 + panY
 
   ctx.drawImage(img, x, y, sw, sh)
-  ctx.restore()
   drawVignette(ctx, W, H)
   drawColorGrade(ctx, W, H)
 }
@@ -1097,7 +1069,7 @@ function sceneFrameUrls(scene: Scene): string[] {
   return []
 }
 
-/** Hold each flipbook page, then quick cut to the next (pose change = motion). */
+/** Render each flipbook page with live Ken Burns, then crossfade to the next page. */
 async function renderSceneFlipbook(
   ctx: CanvasRenderingContext2D,
   scene: Scene,
@@ -1110,21 +1082,34 @@ async function renderSceneFlipbook(
   startGlobalFrame: number,
 ) {
   const n = imgs.length
-  const cuts = FLIPBOOK_PAGE_CUT_FRAMES * Math.max(0, n - 1)
-  const holdFrames = Math.max(FPS, Math.floor((totalFrames - cuts) / n))
+  const totalFadeFrames = FLIPBOOK_PAGE_FADE_FRAMES * Math.max(0, n - 1)
+  const holdPerPage = Math.max(FPS, Math.floor((totalFrames - totalFadeFrames) / n))
   let globalF = startGlobalFrame
 
   for (let seg = 0; seg < n; seg++) {
-    for (let f = 0; f < holdFrames; f++) {
-      drawSceneFrame(ctx, imgs[seg], W, H, 0.5, 'zoom-in', 0)
+    // Each page gets a different motion preset so consecutive pages feel distinct
+    const motion = MOTION_PRESETS[seg % MOTION_PRESETS.length]
+
+    // Animate Ken Burns across the hold (progress 0→1 with easing)
+    for (let f = 0; f < holdPerPage; f++) {
+      const p = easeInOutCubic(f / Math.max(holdPerPage - 1, 1))
+      drawSceneFrame(ctx, imgs[seg], W, H, p, motion)
       drawPaperBorder(ctx, W, H)
       drawSceneOverlays(ctx, scene, W, H, globalF, totalFrames)
       globalF++
       await waitVideoFrame(stream, FPS)
     }
+
+    // Smooth crossfade to next page (no hard cut)
     if (seg < n - 1) {
-      for (let f = 0; f < FLIPBOOK_PAGE_CUT_FRAMES; f++) {
-        drawSceneFrame(ctx, imgs[seg + 1], W, H, 0.5, 'zoom-in', 0)
+      const nextMotion = MOTION_PRESETS[(seg + 1) % MOTION_PRESETS.length]
+      for (let f = 0; f < FLIPBOOK_PAGE_FADE_FRAMES; f++) {
+        const blend = easeInOutCubic(f / FLIPBOOK_PAGE_FADE_FRAMES)
+        drawSceneFrame(ctx, imgs[seg], W, H, 1, motion)
+        ctx.save()
+        ctx.globalAlpha = blend
+        drawSceneFrame(ctx, imgs[seg + 1], W, H, 0, nextMotion)
+        ctx.restore()
         drawPaperBorder(ctx, W, H)
         drawSceneOverlays(ctx, scene, W, H, globalF, totalFrames)
         globalF++
@@ -1355,10 +1340,10 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
       for (let f = 0; f < CROSSFADE_FRAMES; f++) {
         const blend = easeInOutCubic(f / CROSSFADE_FRAMES)
         const prevMotion = MOTION_PRESETS[(si - 1) % MOTION_PRESETS.length]
-        drawSceneFrame(ctx, prevImg, W, H, 1, prevMotion, 0)
+        drawSceneFrame(ctx, prevImg, W, H, 1, prevMotion)
         ctx.save()
         ctx.globalAlpha = blend
-        drawSceneFrame(ctx, imgs[0], W, H, 0, motion, 0)
+        drawSceneFrame(ctx, imgs[0], W, H, 0, motion)
         ctx.restore()
         drawPaperBorder(ctx, W, H)
         drawSceneOverlays(ctx, scene, W, H, f, totalFrames)
@@ -1378,8 +1363,7 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
       for (let f = startF; f < totalFrames; f++) {
         const localF = f - startF
         const progress = easeInOutCubic(localF / Math.max(contentFrames - 1, 1))
-        const wiggle = Math.sin(f * 0.12) * 0.012
-        drawSceneFrame(ctx, imgs[0], W, H, progress, motion, wiggle)
+        drawSceneFrame(ctx, imgs[0], W, H, progress, motion)
         drawPaperBorder(ctx, W, H)
         drawSceneOverlays(ctx, scene, W, H, f, totalFrames)
         await waitVideoFrame(videoStream, FPS)
