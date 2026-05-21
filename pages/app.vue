@@ -2,7 +2,6 @@
 useHead({ title: 'BrandMe AI — Create Your Video' })
 
 const route = useRoute()
-const isProfileSetup = computed(() => route.query.setup === 'profile')
 const showProjectMenu = ref(false)
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -286,42 +285,7 @@ function onPhotoSelected(e: Event) {
   reader.readAsDataURL(file)
 }
 
-async function saveProfileSetup() {
-  if (!canStart.value) return
-  if (!userId.value) {
-    userId.value = crypto.randomUUID()
-    localStorage.setItem('bm_user_id', userId.value)
-  }
-  let photo_key: string | null = null
-  if (profile.photoBase64) {
-    const res = await $fetch<{ key: string | null }>('/api/upload', {
-      method: 'POST',
-      body: { base64: profile.photoBase64, type: 'photo', user_id: userId.value },
-    })
-    photo_key = res.key
-    if (photo_key) profile.photoUrl = `/api/assets/${photo_key}`
-  }
-  await $fetch('/api/user', {
-    method: 'POST',
-    body: {
-      id: userId.value,
-      name: profile.name.trim(),
-      niche: profile.niche.trim(),
-      photo_key,
-      hero_key: null,
-    },
-  })
-  profile.heroUrl = null
-  profile.heroBase64 = null
-  showToastMsg('Profile updated')
-  navigateTo('/profile')
-}
-
 async function startChat() {
-  if (isProfileSetup.value) {
-    await saveProfileSetup()
-    return
-  }
   if (!userId.value) {
     userId.value = crypto.randomUUID()
     localStorage.setItem('bm_user_id', userId.value)
@@ -1116,8 +1080,8 @@ onMounted(async () => {
     }
   }
 
-  if (isProfileSetup.value) {
-    screen.value = 'onboard'
+  if (route.query.setup === 'profile') {
+    navigateTo('/profile')
     return
   }
 
@@ -1130,6 +1094,11 @@ onMounted(async () => {
       nextTick(scrollToBottom)
       return
     }
+  }
+
+  if (user?.name && !user?.niche) {
+    navigateTo('/profile')
+    return
   }
 
   // If profile exists, skip onboard and start a fresh chat
@@ -1148,36 +1117,25 @@ onMounted(async () => {
     <!-- ── ONBOARD ── -->
     <div v-if="screen === 'onboard'" class="screen onboard-screen">
       <div class="onboard-hero">
-        <NuxtLink :to="isProfileSetup ? '/profile' : '/'" class="back-link">
-          <Icon name="lucide:arrow-left" size="14" /> {{ isProfileSetup ? 'Profile' : 'Back' }}
+        <NuxtLink to="/profile" class="back-link">
+          <Icon name="lucide:arrow-left" size="14" /> Profile
         </NuxtLink>
         <BrandLogo :size="52" :wordmark="false" class="logo-mark" />
         <h1>BrandMe <span class="gradient-text">AI</span></h1>
       </div>
       <div class="onboard-form card">
-        <h2>{{ isProfileSetup ? 'Update your profile' : "Let's start with you" }}</h2>
+        <h2>Quick start</h2>
+        <p class="onboard-note">For photo & niche, use your <NuxtLink to="/profile">profile page</NuxtLink> — one place for all account settings.</p>
         <div class="field">
           <label>Your Name</label>
           <input v-model="profile.name" type="text" placeholder="e.g. Sarah Johnson" />
-        </div>
-        <div class="field">
-          <label>Your Photo <span class="hint">(we'll create a caricature)</span></label>
-          <div class="photo-upload" :class="{ 'has-photo': profile.photoUrl }" @click="triggerPhotoUpload">
-            <img v-if="profile.photoUrl" :src="profile.photoUrl" class="photo-preview" />
-            <div v-else class="photo-placeholder">
-              <Icon name="lucide:camera" size="30" class="upload-icon" />
-              <span>Tap to upload photo</span>
-            </div>
-          </div>
-          <input ref="photoInputEl" type="file" accept="image/*" style="display:none" @change="onPhotoSelected" />
         </div>
         <div class="field">
           <label>Your Niche / Industry</label>
           <input v-model="profile.niche" type="text" placeholder="e.g. Digital Marketing, Fitness, Finance" />
         </div>
         <button class="btn btn-primary btn-full" :disabled="!canStart" @click="startChat">
-          <Icon :name="isProfileSetup ? 'lucide:save' : 'lucide:sparkles'" size="16" />
-          {{ isProfileSetup ? 'Save profile' : 'Start Creating' }}
+          <Icon name="lucide:sparkles" size="16" /> Start Creating
         </button>
       </div>
     </div>
@@ -1472,7 +1430,9 @@ onMounted(async () => {
 .logo-mark { margin-bottom:10px; }
 .onboard-hero h1 { font-size:30px; font-weight:800; }
 .onboard-form { margin:24px 16px 0; background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:24px; }
-.onboard-form h2 { font-size:18px; font-weight:700; margin-bottom:20px; }
+.onboard-form h2 { font-size:18px; font-weight:700; margin-bottom:12px; }
+.onboard-note { font-size:13px; color:var(--text2); line-height:1.5; margin-bottom:20px; }
+.onboard-note a { color:var(--accent); font-weight:600; }
 .field { margin-bottom:18px; }
 .field label { display:block; font-size:12px; font-weight:600; color:var(--text2); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px; }
 .hint { text-transform:none; font-weight:400; letter-spacing:0; }

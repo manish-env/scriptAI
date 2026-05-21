@@ -30,7 +30,7 @@ onMounted(async () => {
     $fetch<ProjectSummary[]>(`/api/sessions?user_id=${userId}`).catch(() => []),
   ])
 
-  if (!user?.name) { navigateTo('/app?setup=profile'); return }
+  if (!user?.name || !user?.niche) { navigateTo('/profile'); return }
 
   profile.value = user
   projects.value = sessions ?? []

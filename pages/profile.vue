@@ -14,12 +14,18 @@ const user = ref<UserRow | null>(null)
 const loading = ref(true)
 const saving = ref(false)
 const toast = ref('')
+const toastError = ref(false)
 
 const form = reactive({ name: '', niche: '' })
 const photoInputEl = ref<HTMLInputElement | null>(null)
 const photoPreview = ref<string | null>(null)
 const photoBase64 = ref<string | null>(null)
 const photoChanged = ref(false)
+
+function apiErrorMessage(e: unknown) {
+  const err = e as { data?: { message?: string }; statusMessage?: string; message?: string }
+  return err.data?.message || err.statusMessage || err.message || 'Request failed'
+}
 
 onMounted(async () => {
   const uid = localStorage.getItem('bm_user_id')
@@ -29,14 +35,12 @@ onMounted(async () => {
   }
   userId.value = uid
   const row = await $fetch<UserRow | null>(`/api/user?id=${uid}`).catch(() => null)
-  if (!row?.name) {
-    navigateTo('/app?setup=profile')
-    return
+  if (row?.name) {
+    user.value = row
+    form.name = row.name
+    form.niche = row.niche ?? ''
+    if (row.photo_key) photoPreview.value = `/api/assets/${row.photo_key}`
   }
-  user.value = row
-  form.name = row.name
-  form.niche = row.niche ?? ''
-  if (row.photo_key) photoPreview.value = `/api/assets/${row.photo_key}`
   loading.value = false
 })
 
@@ -49,15 +53,16 @@ function onPhotoSelected(e: Event) {
   if (!file) return
   const reader = new FileReader()
   reader.onload = (ev) => {
-    photoPreview.value = ev.target?.result as string
-    photoBase64.value = (ev.target?.result as string).split(',')[1]
+    const dataUrl = ev.target?.result as string
+    photoPreview.value = dataUrl
+    photoBase64.value = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl
     photoChanged.value = true
   }
   reader.readAsDataURL(file)
 }
 
-async function uploadPhotoIfNeeded() {
-  if (!photoBase64.value || !userId.value) return user.value?.photo_key ?? null
+async function uploadPhoto() {
+  if (!photoBase64.value || !userId.value) return null
   const res = await $fetch<{ key: string | null }>('/api/upload', {
     method: 'POST',
     body: { base64: photoBase64.value, type: 'photo', user_id: userId.value },
@@ -69,42 +74,41 @@ async function saveProfile() {
   if (!form.name.trim() || !userId.value) return
   saving.value = true
   toast.value = ''
+  toastError.value = false
   try {
     let photo_key = user.value?.photo_key ?? null
-    const clearedHero = photoChanged.value
-    if (clearedHero && photoBase64.value) {
-      photo_key = await uploadPhotoIfNeeded()
+    if (photoChanged.value && photoBase64.value) {
+      photo_key = await uploadPhoto()
+      if (!photo_key) throw new Error('Photo upload failed')
     }
-    await $fetch('/api/user', {
+
+    const saved = await $fetch<UserRow>('/api/user', {
       method: 'POST',
       body: {
         id: userId.value,
         name: form.name.trim(),
         niche: form.niche.trim() || null,
         photo_key,
-        hero_key: clearedHero ? null : user.value?.hero_key ?? null,
+        clear_hero: photoChanged.value,
       },
     })
+
     photoChanged.value = false
+    user.value = saved
+    if (saved.photo_key) photoPreview.value = `/api/assets/${saved.photo_key}`
     toast.value = 'Profile saved'
-    user.value = {
-      id: userId.value,
-      name: form.name.trim(),
-      niche: form.niche.trim() || null,
-      photo_key,
-      hero_key: clearedHero ? null : user.value?.hero_key ?? null,
+    toastError.value = false
+
+    if (!user.value?.niche) {
+      setTimeout(() => navigateTo('/projects'), 800)
     }
-    if (photo_key) photoPreview.value = `/api/assets/${photo_key}`
-  } catch {
-    toast.value = 'Could not save profile'
+  } catch (e: unknown) {
+    toast.value = apiErrorMessage(e)
+    toastError.value = true
   } finally {
     saving.value = false
-    setTimeout(() => { toast.value = '' }, 3000)
+    setTimeout(() => { toast.value = '' }, 4000)
   }
-}
-
-function openOnboarding() {
-  navigateTo('/app?setup=profile')
 }
 
 function signOut() {
@@ -129,51 +133,48 @@ function signOut() {
       <div v-if="loading" class="loading-state"><div class="spinner" /></div>
 
       <template v-else>
-        <h1>Your profile</h1>
-        <p class="sub">Update how the AI portrays you across all videos.</p>
+        <h1>{{ user ? 'Your profile' : 'Set up your profile' }}</h1>
+        <p class="sub">
+          One place for your name, photo, and niche — used for every video you create.
+        </p>
 
         <div class="profile-card card">
           <div class="photo-block">
+            <label class="field-label">Your photo</label>
             <div class="photo-upload" :class="{ 'has-photo': photoPreview }" @click="triggerPhoto">
               <img v-if="photoPreview" :src="photoPreview" class="photo-preview" alt="" />
               <div v-else class="photo-placeholder">
                 <Icon name="lucide:camera" size="28" />
-                <span>Add photo</span>
+                <span>Tap to upload</span>
               </div>
             </div>
             <input ref="photoInputEl" type="file" accept="image/*" hidden @change="onPhotoSelected" />
-            <p class="photo-hint">Changing your photo resets your character look — regenerate scene frames after.</p>
+            <p class="photo-hint">
+              We turn this into a consistent caricature for all scenes. Change photo → regenerate scene frames later.
+            </p>
           </div>
 
           <div class="field">
-            <label>Name</label>
-            <input v-model="form.name" type="text" placeholder="Your name" />
+            <label>Your name</label>
+            <input v-model="form.name" type="text" placeholder="e.g. Sarah Johnson" />
           </div>
           <div class="field">
             <label>Niche / industry</label>
-            <input v-model="form.niche" type="text" placeholder="e.g. Marketing, Fitness" />
+            <input v-model="form.niche" type="text" placeholder="e.g. Digital Marketing, Fitness" />
           </div>
 
           <button class="btn btn-primary btn-full" :disabled="saving || !form.name.trim()" @click="saveProfile">
-            {{ saving ? 'Saving…' : 'Save profile' }}
+            {{ saving ? 'Saving…' : (user ? 'Save profile' : 'Save & continue') }}
           </button>
         </div>
 
         <div class="actions-card card">
-          <h2>Account</h2>
-          <button class="action-row" @click="openOnboarding">
-            <Icon name="lucide:user-cog" size="18" />
-            <span>
-              <strong>Full setup wizard</strong>
-              <small>Name, photo & niche step-by-step</small>
-            </span>
-            <Icon name="lucide:chevron-right" size="18" class="chev" />
-          </button>
+          <h2>More</h2>
           <button class="action-row" @click="navigateTo('/projects')">
             <Icon name="lucide:folder" size="18" />
             <span>
               <strong>My projects</strong>
-              <small>View, delete, or clear project media</small>
+              <small>Create and manage brand videos</small>
             </span>
             <Icon name="lucide:chevron-right" size="18" class="chev" />
           </button>
@@ -186,7 +187,7 @@ function signOut() {
           </button>
         </div>
 
-        <p v-if="toast" class="toast-msg">{{ toast }}</p>
+        <p v-if="toast" class="toast-msg" :class="{ error: toastError }">{{ toast }}</p>
       </template>
     </main>
   </div>
@@ -222,13 +223,22 @@ function signOut() {
   padding: 40px 24px 80px;
 }
 .profile-main h1 { font-size: 28px; font-weight: 800; }
-.sub { color: var(--text2); margin: 8px 0 28px; font-size: 14px; }
+.sub { color: var(--text2); margin: 8px 0 28px; font-size: 14px; line-height: 1.5; }
 .card {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 24px;
   margin-bottom: 20px;
+}
+.field-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text2);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 .field { margin-bottom: 18px; }
 .field label {
@@ -253,11 +263,13 @@ function signOut() {
   box-sizing: border-box;
 }
 .field input:focus { border-color: var(--accent); }
+.photo-block { margin-bottom: 20px; }
 .photo-upload {
   width: 100%;
   max-width: 200px;
   aspect-ratio: 1;
   margin: 0 auto 12px;
+  display: block;
   background: var(--bg3);
   border: 2px dashed var(--border);
   border-radius: var(--radius-sm);
@@ -314,6 +326,13 @@ function signOut() {
   color: var(--success);
   font-size: 14px;
   font-weight: 600;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(34, 197, 94, 0.1);
+}
+.toast-msg.error {
+  color: var(--error);
+  background: rgba(239, 68, 68, 0.1);
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 </style>
