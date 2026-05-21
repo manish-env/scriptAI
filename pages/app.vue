@@ -838,8 +838,8 @@ onMounted(async () => {
 .download-bar { flex-shrink:0; padding:12px 16px; background:var(--bg2); border-bottom:1px solid var(--border); }
 .video-preview-mini { width:100%; border-radius:var(--radius-sm); display:block; max-height:200px; background:#000; }
 .mt-sm { margin-top:12px; }
-.preview-content { flex:1; overflow-x:auto; overflow-y:hidden; padding:16px; display:flex; flex-direction:column; }
-.scenes-list { display:flex; flex-direction:row; gap:16px; height:100%; align-items:flex-start; }
+.preview-content { flex:1; overflow-x:auto; overflow-y:hidden; padding:16px; display:flex; align-items:flex-start; }
+.scenes-list { display:flex; flex-direction:row; gap:16px; }
 
 /* Scene card */
 .scene-card { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; flex-shrink:0; width:340px; }
