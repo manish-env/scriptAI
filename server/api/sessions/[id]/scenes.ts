@@ -11,10 +11,32 @@ export default defineEventHandler(async (event) => {
     const { scenes }: { scenes: Scene[] } = await readBody(event)
     if (!scenes?.length) throw createError({ statusCode: 400, message: 'scenes required' })
     if (env.DB) {
+      // Preserve existing scene IDs + image keys by position so that:
+      // 1. scene.id stays stable (PATCH calls keep working after a sync)
+      // 2. image_key / frame_keys are not wiped when script text is edited
+      const { results: existing } = await env.DB
+        .prepare('SELECT id, position, image_key, frame_keys FROM scenes WHERE session_id = ? ORDER BY position ASC')
+        .bind(session_id).all()
+
+      type ExistingRow = { id: string; position: number; image_key: string | null; frame_keys: string | null }
+      const byPos = new Map((existing as ExistingRow[]).map(r => [r.position, r]))
+
       await env.DB.prepare('DELETE FROM scenes WHERE session_id = ?').bind(session_id).run()
-      const stmt = env.DB.prepare('INSERT INTO scenes (id, session_id, position, title, narration, image_prompt, duration, mood) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      await env.DB.batch(scenes.map((s, i) => stmt.bind(uuid(), session_id, i, s.title, s.narration, s.imagePrompt, Math.min(5, Math.max(2, s.duration ?? 5)), s.mood ?? null)))
-      const { results } = await env.DB.prepare('SELECT * FROM scenes WHERE session_id = ? ORDER BY position ASC').bind(session_id).all()
+
+      const stmt = env.DB.prepare(
+        'INSERT INTO scenes (id, session_id, position, title, narration, image_prompt, duration, mood, image_key, frame_keys) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      await env.DB.batch(scenes.map((s, i) => {
+        const prev = byPos.get(i)
+        const id = prev?.id ?? uuid()
+        const image_key = prev?.image_key ?? null
+        const frame_keys = prev?.frame_keys ?? null
+        return stmt.bind(id, session_id, i, s.title, s.narration, s.imagePrompt, Math.min(5, Math.max(2, s.duration ?? 5)), s.mood ?? null, image_key, frame_keys)
+      }))
+
+      const { results } = await env.DB
+        .prepare('SELECT * FROM scenes WHERE session_id = ? ORDER BY position ASC')
+        .bind(session_id).all()
       return results
     }
     return scenes

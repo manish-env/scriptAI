@@ -307,9 +307,21 @@ function syncMessages(msgs: { role: string; content: string }[]) {
   dbPost(`/api/sessions/${sessionId.value}/messages`, { messages: msgs })
 }
 
-function syncScenes(scenes: Scene[]) {
+async function syncScenes(scenes: Scene[]) {
   if (!sessionId.value) return
-  dbPost(`/api/sessions/${sessionId.value}/scenes`, { scenes })
+  try {
+    const rows = await $fetch<{ id: string; position: number }[]>(
+      `/api/sessions/${sessionId.value}/scenes`,
+      { method: 'POST', body: { scenes } },
+    )
+    // Update scene IDs so subsequent PATCH calls (persistSceneFrames) hit the right rows
+    if (Array.isArray(rows)) {
+      rows.forEach(row => {
+        const s = videoProject.scenes[row.position]
+        if (s) s.id = row.id
+      })
+    }
+  } catch (e) { console.warn('sync scenes failed', e) }
   dbPatch(`/api/sessions/${sessionId.value}`, { title: videoProject.title, topic: videoProject.topic })
 }
 
@@ -726,18 +738,15 @@ async function generateSceneFrames(index: number) {
       scene.generatingLabel = fi === 0 ? `Page 1/${FRAMES_PER_SCENE} (new scene)` : `Page ${fi + 1}/${FRAMES_PER_SCENE} (pose)`
       let replicateUrl: string
       if (fi === 0) {
-        try {
-          replicateUrl = await runConsistentCharacterScene(
-            buildSceneEstablishPromptCharacterModel(scene.imagePrompt, charDesc, pose, scene.mood),
-            photoB64,
-          )
-        } catch {
-          replicateUrl = await runKontextEdit(
-            buildSceneEstablishPromptKontext(scene.imagePrompt, charDesc, pose, scene.mood),
-            photoB64,
-            'image/jpeg',
-          )
-        }
+        // Use the hero caricature (already in the correct illustration style) as the
+        // reference image so Kontext inherits the style and only changes the scene.
+        // Fall back to raw photo if hero hasn't been generated yet.
+        const refB64 = profile.heroBase64 ?? photoB64
+        replicateUrl = await runKontextEdit(
+          buildSceneEstablishPromptKontext(scene.imagePrompt, charDesc, pose, scene.mood),
+          refB64,
+          'image/jpeg',
+        )
       } else {
         replicateUrl = await runKontextEdit(buildPoseEditPrompt(pose), scenePageRef!)
       }
@@ -793,23 +802,6 @@ async function runKontextEdit(
       aspect_ratio: '16:9',
       output_format: 'png',
       safety_tolerance: 2,
-    },
-  })
-  return pollReplicate(id)
-}
-
-async function runConsistentCharacterScene(prompt: string, subjectBase64: string) {
-  const id = await startImagePrediction({
-    model: REPLICATE_MODELS.character,
-    input: {
-      subject: imageDataUri(subjectBase64, 'image/jpeg'),
-      prompt,
-      negative_prompt: ILLUSTRATION_NEGATIVE,
-      number_of_outputs: 1,
-      number_of_images_per_pose: 1,
-      randomise_poses: false,
-      output_format: 'png',
-      output_quality: 95,
     },
   })
   return pollReplicate(id)

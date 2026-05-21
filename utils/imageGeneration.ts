@@ -1,21 +1,30 @@
 /** Replicate models + illustration prompts for scene / flipbook generation */
 
 export const REPLICATE_MODELS = {
-  /** Identity + new scene/background from reference photo */
-  character: 'sdxl-based/consistent-character',
-  /** Pose edits & hero stylization while keeping face + scene */
+  /** Pose edits, scene placement, and hero stylization — single model for all frames */
   kontext: 'black-forest-labs/flux-kontext-pro',
 } as const
 
+/** Single source of truth for art style — used in every prompt so every frame looks the same */
 export const ILLUSTRATION_STYLE =
-  'editorial vector caricature, professional magazine illustration, clean confident linework, subtle realistic proportions, refined portrait art, adult sophisticated look'
+  'semi-realistic vector illustration: sharp clean linework, bold flat colors with minimal gradient shading, professional editorial character art, consistent warm color palette, crisp defined edges, 2.5D infographic look, NOT photorealistic, NOT anime, NOT cartoon'
 
 export const ILLUSTRATION_NEGATIVE =
-  'chibi, anime, childish cartoon, mascot, 3d pixar, plastic doll, grotesque, overly cute, big cartoon eyes, photorealistic DSLR photograph, different person, different face, wrong identity, duplicate, blurry, watermark, plain white void, generic grey studio'
+  'photorealistic DSLR photograph, hyperrealistic, anime, chibi, cartoon, mascot, 3d render, pixar, plastic doll, watermark, blurry, different face, different person, wrong identity, plain white void, generic studio backdrop'
 
 export function imageDataUri(base64: string, mime: 'image/jpeg' | 'image/png' = 'image/png') {
   if (base64.startsWith('data:')) return base64
   return `data:${mime};base64,${base64}`
+}
+
+export function buildHeroPrompt(name: string, niche: string, characterDescription: string) {
+  return [
+    `Art style: ${ILLUSTRATION_STYLE}.`,
+    'Convert this person into that illustration style.',
+    characterDescription || `Professional ${niche} expert, ${name}.`,
+    'Preserve exact face structure, hair color, skin tone, and identity — subtle flattering caricature proportions only.',
+    'Head and shoulders portrait, clean neutral gradient background, 16:9.',
+  ].join(' ')
 }
 
 export function buildSceneEstablishPromptKontext(
@@ -25,43 +34,19 @@ export function buildSceneEstablishPromptKontext(
   mood: string,
 ) {
   return [
-    `Place this exact person in this location: ${imagePrompt}`,
-    `Character (keep identity): ${characterDescription}`,
+    `Art style: ${ILLUSTRATION_STYLE}. Maintain this exact illustration style from the input image.`,
+    `Place this character into a new scene: ${imagePrompt}`,
+    `Character (keep identical — same face, skin tone, hair, outfit): ${characterDescription}`,
     `Pose: ${pose}. Mood: ${mood}.`,
-    ILLUSTRATION_STYLE,
-    'Wide cinematic shot, full environment and background clearly visible, 16:9, not a plain studio backdrop.',
-  ].join(' ')
-}
-
-export function buildHeroPrompt(name: string, niche: string, characterDescription: string) {
-  return [
-    `Transform this person into ${ILLUSTRATION_STYLE}.`,
-    characterDescription || `Professional ${niche} expert named ${name}.`,
-    'Same person, identical face, hair, and skin tone, flattering subtle caricature exaggeration only.',
-    'Head and shoulders portrait, soft neutral background, 16:9 composition.',
-  ].join(' ')
-}
-
-export function buildSceneEstablishPromptCharacterModel(
-  imagePrompt: string,
-  characterDescription: string,
-  pose: string,
-  mood: string,
-) {
-  return [
-    `LOCATION (draw this exact place): ${imagePrompt}`,
-    characterDescription,
-    `Pose: ${pose}. Mood: ${mood}.`,
-    ILLUSTRATION_STYLE,
-    'Wide shot showing full environment, cinematic 16:9 framing.',
+    'Full environment and background clearly visible. Wide cinematic 16:9 framing.',
   ].join(' ')
 }
 
 export function buildPoseEditPrompt(pose: string) {
   return [
-    `Change only this person's body pose and expression to: ${pose}.`,
-    'Keep the exact same background, room, furniture, props, lighting, colors, camera angle, and illustration style.',
-    'Keep the same face, hair, skin tone, outfit, and identity — do not change the environment.',
+    `Change ONLY the character's body pose and expression to: ${pose}.`,
+    `Preserve EXACTLY: illustration style (${ILLUSTRATION_STYLE}), background, room, furniture, props, lighting, colors, camera angle, character face, hair, skin tone, and outfit.`,
+    'Do not alter anything except the pose and expression.',
   ].join(' ')
 }
 
