@@ -3,29 +3,65 @@ useHead({ title: 'BrandMe AI — Personal Brand Videos Without Showing Your Face
 
 const authModal = ref<'login' | 'signup' | null>(null)
 const navOpen = ref(false)
+const authLoading = ref(false)
+const authError = ref('')
 
-function goToApp() {
-  navigateTo('/projects')
+const signupName = ref('')
+const signupEmail = ref('')
+const loginEmail = ref('')
+
+function openModal(mode: 'login' | 'signup') {
+  authError.value = ''
+  authModal.value = mode
 }
 
-function handleLogin(e: Event) {
+async function handleSignup(e: Event) {
   e.preventDefault()
-  navigateTo('/projects')
+  if (!signupName.value.trim()) return
+  authLoading.value = true
+  authError.value = ''
+  try {
+    const userId = crypto.randomUUID()
+    await $fetch('/api/user', {
+      method: 'POST',
+      body: { id: userId, name: signupName.value.trim(), niche: null },
+    })
+    localStorage.setItem('bm_user_id', userId)
+    navigateTo('/projects')
+  } catch {
+    authError.value = 'Something went wrong. Please try again.'
+  } finally {
+    authLoading.value = false
+  }
 }
 
-function handleSignup(e: Event) {
+async function handleLogin(e: Event) {
   e.preventDefault()
-  const name = (document.getElementById('signupName') as HTMLInputElement)?.value
-  if (name) localStorage.setItem('bm_pending_name', name)
-  navigateTo('/projects')
+  authLoading.value = true
+  authError.value = ''
+  try {
+    const existingId = localStorage.getItem('bm_user_id')
+    if (existingId) {
+      const user = await $fetch<{ id: string; name: string } | null>(`/api/user?id=${existingId}`).catch(() => null)
+      if (user?.id) { navigateTo('/projects'); return }
+    }
+    // No existing session — treat as signup with email as identifier
+    const userId = crypto.randomUUID()
+    const name = loginEmail.value.split('@')[0] || 'Creator'
+    await $fetch('/api/user', { method: 'POST', body: { id: userId, name, niche: null } })
+    localStorage.setItem('bm_user_id', userId)
+    navigateTo('/projects')
+  } catch {
+    authError.value = 'Something went wrong. Please try again.'
+  } finally {
+    authLoading.value = false
+  }
 }
 
-// Close modal on overlay click
 function onOverlayClick(e: MouseEvent) {
   if ((e.target as HTMLElement).classList.contains('modal-overlay')) authModal.value = null
 }
 
-// Sticky navbar on scroll
 onMounted(() => {
   const navbar = document.getElementById('site-navbar')
   window.addEventListener('scroll', () => {
@@ -51,8 +87,8 @@ onMounted(() => {
         </nav>
 
         <div class="nav-actions">
-          <button class="btn btn-ghost" @click="authModal = 'login'">Log In</button>
-          <button class="btn btn-primary" @click="authModal = 'signup'">
+          <button class="btn btn-ghost" @click="openModal('login')">Log In</button>
+          <button class="btn btn-primary" @click="openModal('signup')">
             Get Started <span>→</span>
           </button>
         </div>
@@ -76,7 +112,7 @@ onMounted(() => {
           Chat with AI about your story and we'll create a professional brand video — with custom caricature illustrations of you. No studio. No face on camera.
         </p>
         <div class="hero-cta">
-          <button class="btn btn-primary btn-lg" @click="authModal = 'signup'">Start for Free</button>
+          <button class="btn btn-primary btn-lg" @click="openModal('signup')">Start for Free</button>
           <a href="#how" class="btn btn-outline btn-lg">See How It Works</a>
         </div>
         <div class="hero-proof">
@@ -215,7 +251,7 @@ onMounted(() => {
             </ul>
             <button
               :class="plan.featured ? 'btn btn-primary btn-full' : 'btn btn-outline btn-full'"
-              @click="authModal = 'signup'"
+              @click="openModal('signup')"
             >
               {{ plan.cta }}
             </button>
@@ -231,7 +267,7 @@ onMounted(() => {
           <div class="cta-glow" />
           <h2>Ready to build your brand?</h2>
           <p>Join 5,000+ creators making professional brand videos — without a camera.</p>
-          <button class="btn btn-primary btn-lg" @click="authModal = 'signup'">
+          <button class="btn btn-primary btn-lg" @click="openModal('signup')">
             Start for Free — No Card Required
           </button>
         </div>
@@ -272,18 +308,27 @@ onMounted(() => {
         <div v-if="authModal" class="modal-overlay" @click="onOverlayClick">
           <div class="modal-box">
             <button class="modal-close" @click="authModal = null">✕</button>
-            <div class="modal-logo">🎬</div>
+            <div class="modal-logo"><BrandLogo :size="40" :wordmark="false" /></div>
 
             <!-- Login -->
             <template v-if="authModal === 'login'">
               <h2>Welcome back</h2>
               <p class="modal-sub">Sign in to your BrandMe AI account</p>
               <form @submit="handleLogin">
-                <div class="form-field"><label>Email</label><input type="email" placeholder="you@example.com" required /></div>
-                <div class="form-field"><label>Password</label><input type="password" placeholder="••••••••" required /></div>
-                <button type="submit" class="btn btn-primary btn-full">Sign In</button>
+                <div class="form-field">
+                  <label>Email</label>
+                  <input v-model="loginEmail" type="email" placeholder="you@example.com" required />
+                </div>
+                <div class="form-field">
+                  <label>Password</label>
+                  <input type="password" placeholder="••••••••" required />
+                </div>
+                <p v-if="authError" class="auth-error">{{ authError }}</p>
+                <button type="submit" class="btn btn-primary btn-full" :disabled="authLoading">
+                  {{ authLoading ? 'Signing in…' : 'Sign In' }}
+                </button>
               </form>
-              <p class="modal-switch">Don't have an account? <button @click="authModal = 'signup'">Sign up free</button></p>
+              <p class="modal-switch">Don't have an account? <button @click="openModal('signup')">Sign up free</button></p>
             </template>
 
             <!-- Signup -->
@@ -291,13 +336,25 @@ onMounted(() => {
               <h2>Create your account</h2>
               <p class="modal-sub">Start building your personal brand today</p>
               <form @submit="handleSignup">
-                <div class="form-field"><label>Full Name</label><input id="signupName" type="text" placeholder="Sarah Johnson" required /></div>
-                <div class="form-field"><label>Email</label><input type="email" placeholder="you@example.com" required /></div>
-                <div class="form-field"><label>Password</label><input type="password" placeholder="Create a password" required minlength="8" /></div>
-                <button type="submit" class="btn btn-primary btn-full">Create Free Account →</button>
+                <div class="form-field">
+                  <label>Full Name</label>
+                  <input v-model="signupName" type="text" placeholder="Sarah Johnson" required />
+                </div>
+                <div class="form-field">
+                  <label>Email</label>
+                  <input v-model="signupEmail" type="email" placeholder="you@example.com" required />
+                </div>
+                <div class="form-field">
+                  <label>Password</label>
+                  <input type="password" placeholder="Create a password" required minlength="8" />
+                </div>
+                <p v-if="authError" class="auth-error">{{ authError }}</p>
+                <button type="submit" class="btn btn-primary btn-full" :disabled="authLoading">
+                  {{ authLoading ? 'Creating account…' : 'Create Free Account →' }}
+                </button>
                 <p class="terms">By signing up you agree to our <a href="#">Terms</a> &amp; <a href="#">Privacy Policy</a>.</p>
               </form>
-              <p class="modal-switch">Already have an account? <button @click="authModal = 'login'">Sign in</button></p>
+              <p class="modal-switch">Already have an account? <button @click="openModal('login')">Sign in</button></p>
             </template>
           </div>
         </div>
@@ -868,6 +925,7 @@ const footerLinks = [
 .modal-switch button { background: none; border: none; color: var(--accent); font-size: 14px; cursor: pointer; font-weight: 600; }
 .terms { font-size: 12px; color: var(--text2); text-align: center; margin-top: 12px; }
 .terms a { color: var(--accent); text-decoration: none; }
+.auth-error { color: var(--error); font-size: 13px; margin-bottom: 10px; padding: 8px 12px; background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.2); border-radius: 8px; }
 
 /* ── Modal transition ── */
 .modal-enter-active, .modal-leave-active { transition: opacity 0.25s, transform 0.25s; }
