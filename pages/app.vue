@@ -10,6 +10,8 @@ interface Scene {
   title: string
   narration: string
   imagePrompt: string
+  /** Three pose/visual beats for paper-flip animation (from script JSON). */
+  framePrompts?: string[]
   duration: number
   mood: string
   imageUrl: string | null
@@ -92,7 +94,9 @@ function schedulePersistScenes() {
     syncScenes(videoProject.scenes.map(s => ({
       title: s.title,
       narration: s.narration,
-      imagePrompt: s.imagePrompt,
+      imagePrompt: s.framePrompts?.length
+        ? JSON.stringify({ imagePrompt: s.imagePrompt, framePrompts: s.framePrompts })
+        : s.imagePrompt,
       duration: s.duration,
       mood: s.mood,
     })))
@@ -248,6 +252,26 @@ async function loadSession(id: string) {
     videoProject.scenes = data.scenes.map((s) => {
       const frameUrls = parseFrameKeys((s as DbScene & { frame_keys?: string }).frame_keys)
       const fallback = s.image_key ? `/api/assets/${s.image_key}` : null
+      let framePrompts: string[] | undefined
+      try {
+        const parsed = JSON.parse(s.image_prompt)
+        if (parsed?.imagePrompt) {
+          framePrompts = parsed.framePrompts
+          return {
+            id: s.id,
+            title: s.title,
+            narration: s.narration,
+            imagePrompt: parsed.imagePrompt,
+            framePrompts,
+            duration: s.duration,
+            mood: s.mood,
+            frameUrls: frameUrls.length ? frameUrls : (fallback ? [fallback] : []),
+            imageUrl: frameUrls[0] ?? fallback,
+            generating: false,
+            generatingLabel: null,
+          }
+        }
+      } catch { /* plain image_prompt */ }
       return {
         id: s.id,
         title: s.title,
@@ -334,13 +358,20 @@ function buildChatMessages() {
 async function callClaude(msgs: { role: string; content: string }[], systemOverride?: string) {
   const system = systemOverride || `You are an expert personal brand video strategist and content creator.
 The user is ${profile.name}, working in the ${profile.niche} niche.
-They want to create personal brand videos WITHOUT showing their face — using illustrated caricature-style images.
+They create personal brand videos WITHOUT showing their face — using illustrated caricature scenes.
+
+VIDEO FORMAT (important):
+- Each video has 4-6 scenes.
+- Each scene becomes ${FRAMES_PER_SCENE} illustrated images (paper-flip): same character, 3 scene-specific pose beats derived from that scene's story.
+- On script creation you write imagePrompt plus framePrompts tailored to each scene's narration (not generic poses).
+
 Your job is to:
-1. Chat naturally, ask questions to understand their message, audience, and story
+1. Chat naturally; understand their message, audience, and story
 2. Help them craft a compelling video concept
-3. When they ask to create a video (or when you have enough info), suggest creating it
-4. When creating a video script, structure scenes clearly
-Be concise, warm, and actionable. Use markdown for formatting when helpful.`
+3. When they have enough info, suggest creating the video
+4. Remember: visuals must keep the SAME character look in every scene
+
+Be concise, warm, and actionable. Use markdown when helpful.`
 
   const data = await $fetch<{ content: { text: string }[] }>('/api/chat', {
     method: 'POST',
@@ -371,7 +402,15 @@ async function triggerVideoCreation() {
     const summary = `🎬 **Video script created!** "${scriptJson.title}"\n\nI've written **${scriptJson.scenes.length} scenes** for your video:\n${scriptJson.scenes.map((s: Scene, i: number) => `${i + 1}. **${s.title}** — ${s.narration.slice(0, 60)}…`).join('\n')}\n\nOpen the storyboard and **Generate** — each scene gets **${FRAMES_PER_SCENE} paper-flip frames** (same face, subtle pose changes) for a stop-motion feel. Ready?`
     messages.value.push({ role: 'assistant', content: summary, suggestCreate: false })
     scrollToBottom()
-    syncScenes(scriptJson.scenes)
+    syncScenes(videoProject.scenes.map(s => ({
+      title: s.title,
+      narration: s.narration,
+      imagePrompt: s.framePrompts?.length
+        ? JSON.stringify({ imagePrompt: s.imagePrompt, framePrompts: s.framePrompts })
+        : s.imagePrompt,
+      duration: s.duration,
+      mood: s.mood,
+    })))
     syncMessages([{ role: 'assistant', content: summary }])
   } catch (e: unknown) {
     aiTyping.value = false
@@ -380,39 +419,116 @@ async function triggerVideoCreation() {
 }
 
 async function generateVideoScript() {
-  const system = `You are a professional video script writer specializing in personal brand videos.
-The creator is ${profile.name} in the ${profile.niche} niche.
-Based on the conversation, create a compelling short video script (60-90 seconds total, 4-6 scenes).
+  const system = `You are a professional video script writer for illustrated personal-brand videos.
+Creator: ${profile.name} (${profile.niche} niche).
+Output: short video script, 60-90 seconds total, 4-6 scenes.
 
-IMPORTANT: Respond ONLY with valid JSON, no markdown, no explanation. Format:
-{"title":"Video title","topic":"One sentence topic","characterDescription":"Fixed visual description of ${profile.name || 'the creator'} for ALL scenes: face, hair, skin tone, outfit, art style — never change between scenes","scenes":[{"title":"Scene title","narration":"Voiceover text (2-3 sentences)","imagePrompt":"Scene action and background only — do NOT re-describe the face differently each time","duration":15,"mood":"inspiring"}]}`
+ANIMATION MODEL: Each scene becomes exactly ${FRAMES_PER_SCENE} images of the SAME character (paper-flip). The character's face, hair, skin tone, and outfit must match characterDescription in every frame.
+
+IMPORTANT: Respond ONLY with valid JSON (no markdown). Schema:
+{
+  "title": "Video title",
+  "topic": "One sentence topic",
+  "characterDescription": "Fixed look for ${profile.name || 'the creator'} used in ALL scenes and frames: face, hair, skin, outfit, caricature art style — never change",
+  "scenes": [
+    {
+      "title": "Scene title",
+      "narration": "Voiceover, 2-3 sentences",
+      "imagePrompt": "Scene setting, background, props, and what the character is doing — do NOT redefine the face each scene",
+      "framePrompts": ["pose/expression for beat 1", "pose/expression for beat 2", "pose/expression for beat 3"],
+      "duration": 10,
+      "mood": "inspiring"
+    }
+  ]
+}
+
+Rules:
+- framePrompts MUST be exactly ${FRAMES_PER_SCENE} strings per scene, written for THAT scene's narration (setup → key moment → payoff). Never use generic copy-paste poses across scenes.
+- imagePrompt = shared environment/action; framePrompts = pose, hands, and expression only (no background).
+- Do not describe different people across scenes.`
 
   const msgs = [...buildChatMessages(), { role: 'user', content: 'Based on our conversation, create the video script JSON now. Respond ONLY with the JSON object.' }]
   const raw = await callClaude(msgs, system)
   const match = raw.match(/\{[\s\S]*\}/)
   if (!match) throw new Error('Could not parse video script')
-  return JSON.parse(match[0])
+  const script = JSON.parse(match[0]) as { scenes?: Scene[] }
+  for (const scene of script.scenes ?? []) {
+    if (!hasValidFramePrompts(scene)) {
+      scene.framePrompts = await generateFramePromptsForScene(scene)
+    }
+  }
+  return script
 }
 
-// ── Image Generation (hero + 3 paper-flip frames per scene) ─────────────────
-const FRAME_POSES = [
-  'neutral relaxed pose, friendly subtle smile, hands relaxed at sides',
-  'expressive explaining gesture, one hand raised, engaged eyes',
-  'warm reaction pose, slight head tilt, confident smile, subtle hand movement',
-]
+// ── Frame prompts (AI per scene, no hardcoded poses) ───────────────────────
+function hasValidFramePrompts(scene: Scene) {
+  return Array.isArray(scene.framePrompts)
+    && scene.framePrompts.length === FRAMES_PER_SCENE
+    && scene.framePrompts.every(p => typeof p === 'string' && p.trim().length > 0)
+}
+
+async function generateFramePromptsForScene(scene: Scene) {
+  const system = `You write pose-only cues for a ${FRAMES_PER_SCENE}-frame paper-flip animation of one illustrated video scene.
+Respond ONLY with valid JSON: {"framePrompts":["...","...","..."]}
+Exactly ${FRAMES_PER_SCENE} strings. Each string: body pose, hand position, and facial expression only — no background, props, or wardrobe.
+The three beats must follow this scene's narration (opening → emphasis → closing). Make them specific to the story beat, not generic templates.`
+
+  const raw = await callClaude(
+    [{ role: 'user', content: JSON.stringify({
+      title: scene.title,
+      narration: scene.narration,
+      mood: scene.mood,
+      imagePrompt: scene.imagePrompt,
+    }) }],
+    system,
+  )
+  const match = raw.match(/\{[\s\S]*\}/)
+  if (!match) throw new Error('Could not generate frame prompts')
+  const parsed = JSON.parse(match[0]) as { framePrompts?: unknown }
+  if (!Array.isArray(parsed.framePrompts) || parsed.framePrompts.length !== FRAMES_PER_SCENE) {
+    throw new Error('AI returned invalid frame prompts')
+  }
+  return parsed.framePrompts.map(p => String(p).trim())
+}
+
+async function ensureSceneFramePrompts(scene: Scene) {
+  if (hasValidFramePrompts(scene)) return
+  scene.framePrompts = await generateFramePromptsForScene(scene)
+  schedulePersistScenes()
+}
+
+let framePromptRegenTimer: ReturnType<typeof setTimeout> | null = null
+function onSceneVisualPromptInput(index: number) {
+  schedulePersistScenes()
+  const scene = videoProject.scenes[index]
+  if (!scene?.imagePrompt?.trim()) return
+  if (framePromptRegenTimer) clearTimeout(framePromptRegenTimer)
+  framePromptRegenTimer = setTimeout(async () => {
+    try {
+      scene.framePrompts = await generateFramePromptsForScene(scene)
+      schedulePersistScenes()
+    } catch (e: unknown) {
+      showToastMsg((e as Error).message || 'Could not update frame poses', 'error')
+    }
+  }, 900)
+}
 
 function buildFramePrompt(scene: Scene, poseIndex: number) {
   const char = profile.characterDescription
     || videoProject.characterDescription
     || `caricature of ${profile.name}, ${profile.niche} creator`
+  const poseHint = scene.framePrompts?.[poseIndex]?.trim()
+  if (!poseHint) throw new Error('Frame prompts missing for this scene')
   return [
     char,
     'Same character as reference image, identical face, hair, skin tone, and outfit.',
     scene.imagePrompt,
-    `Pose only: ${FRAME_POSES[poseIndex]}.`,
+    `Pose for frame ${poseIndex + 1} of ${FRAMES_PER_SCENE}: ${poseHint}.`,
     'Paper-cut flat illustration, soft paper texture edge, warm colors, 16:9.',
   ].join(' ')
 }
+
+// ── Image Generation (hero + 3 paper-flip frames per scene) ─────────────────
 
 async function ensureHeroCaricature() {
   if (profile.heroBase64) return
@@ -464,6 +580,8 @@ async function generateSceneFrames(index: number) {
     if (!profile.heroBase64 && !profile.photoBase64) {
       throw new Error('Upload a photo first so we can lock your character look')
     }
+    scene.generatingLabel = 'Planning poses…'
+    await ensureSceneFramePrompts(scene)
     for (let fi = 0; fi < FRAMES_PER_SCENE; fi++) {
       scene.generatingLabel = `Frame ${fi + 1}/${FRAMES_PER_SCENE}`
       const replicateUrl = await callReplicate(buildFramePrompt(scene, fi), { strength: 0.38 })
@@ -1395,8 +1513,20 @@ onMounted(async () => {
                 class="inspector-prompt-input"
                 rows="3"
                 placeholder="Describe the illustration for this scene…"
-                @input="schedulePersistScenes"
+                @input="onSceneVisualPromptInput(selectedSceneIndex)"
               />
+            </div>
+            <div v-if="videoProject.scenes[selectedSceneIndex].framePrompts?.length" class="inspector-frames">
+              <label class="scene-prompt-label">Frame poses (AI)</label>
+              <ul class="frame-prompt-list">
+                <li
+                  v-for="(fp, fi) in videoProject.scenes[selectedSceneIndex].framePrompts"
+                  :key="fi"
+                >
+                  <span class="frame-prompt-num">{{ fi + 1 }}</span>
+                  {{ fp }}
+                </li>
+              </ul>
             </div>
           </div>
         </div>
@@ -1972,6 +2102,22 @@ onMounted(async () => {
 .inspector-head strong { font-size: 13px; }
 .inspector-narration { font-size: 12px; line-height: 1.5; color: var(--text2); margin-bottom: 8px; }
 .inspector-prompt { border-left: 2px solid var(--border); padding-left: 10px; }
+.inspector-frames { margin-top: 12px; border-left: 2px solid var(--accent); padding-left: 10px; }
+.frame-prompt-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.frame-prompt-list li { font-size: 11px; color: var(--text2); line-height: 1.4; display: flex; gap: 8px; align-items: flex-start; }
+.frame-prompt-num {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: var(--bg3);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 .scene-prompt-label { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 3px; display: block; }
 .scene-prompt-text { font-size: 11px; color: var(--text2); line-height: 1.45; font-style: italic; }
 
