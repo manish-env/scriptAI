@@ -673,7 +673,7 @@ RESPOND ONLY with valid JSON (no markdown, no extra text). Schema:
 {
   "title": "Video title",
   "topic": "One sentence topic",
-  "characterDescription": "Fixed character look: face, hair, skin tone, outfit — semi-realistic vector caricature style — never changes",
+  "characterDescription": "Fixed character look: realistic face features, exact hair color and style, skin tone, outfit details — semi-realistic digital illustration style, NOT cartoonish — never changes",
   "scenes": [
     {
       "title": "Scene title",
@@ -690,7 +690,7 @@ Rules:
 - duration: integer between ${MIN_SCENE_DURATION} and ${MAX_SCENE_DURATION} — choose naturally based on narration length
 - Every scene MUST have a clearly different location in imagePrompt
 - framePrompts: exactly ${FRAMES_PER_SCENE} strings — character pose/expression only, no background mention
-- One person only. Visual style: semi-realistic vector caricature, editorial magazine illustration.`
+- One person only. Visual style: semi-realistic digital illustration — cinematic 3D shading, realistic face proportions, detailed environments. NOT cartoon, NOT flat vector art.`
 
   const msgs = [
     ...buildChatMessagesForScript(),
@@ -756,7 +756,7 @@ function onSceneVisualPromptInput(index: number) {
 function characterDescriptionForPrompt() {
   return profile.characterDescription
     || videoProject.characterDescription
-    || `${profile.name}, ${profile.niche} professional, editorial vector caricature style`
+    || `${profile.name}, ${profile.niche} professional, semi-realistic digital illustration style`
 }
 
 function requirePhotoBase64() {
