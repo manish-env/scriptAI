@@ -30,14 +30,14 @@ const newPhotoBase64 = ref<string | null>(null)
 const form = reactive({ videoType: '', title: '', purpose: '' })
 
 const VIDEO_TYPES = [
-  { value: 'personal-brand',    label: '🎯 Personal Brand Story' },
-  { value: 'educational',       label: '📚 Educational Tutorial' },
-  { value: 'motivational',      label: '🔥 Motivational / Inspirational' },
-  { value: 'product-demo',      label: '🛍️ Product Demo' },
-  { value: 'how-to',            label: '🔧 How-To Guide' },
-  { value: 'case-study',        label: '📈 Case Study / Success Story' },
-  { value: 'thought-leadership',label: '💡 Thought Leadership' },
-  { value: 'course-teaser',     label: '🎓 Course / Program Teaser' },
+  { value: 'personal-brand',    label: 'Personal Brand Story',        icon: 'fa6-solid:bullseye' },
+  { value: 'educational',       label: 'Educational Tutorial',         icon: 'fa6-solid:book-open' },
+  { value: 'motivational',      label: 'Motivational / Inspirational', icon: 'fa6-solid:fire' },
+  { value: 'product-demo',      label: 'Product Demo',                 icon: 'fa6-solid:bag-shopping' },
+  { value: 'how-to',            label: 'How-To Guide',                 icon: 'fa6-solid:wrench' },
+  { value: 'case-study',        label: 'Case Study / Success Story',   icon: 'fa6-solid:chart-line' },
+  { value: 'thought-leadership',label: 'Thought Leadership',           icon: 'fa6-solid:lightbulb' },
+  { value: 'course-teaser',     label: 'Course / Program Teaser',      icon: 'fa6-solid:graduation-cap' },
 ]
 
 function openNewProject() {
@@ -189,10 +189,10 @@ function timeAgo(iso: string) {
         </div>
         <div class="top-actions">
           <NuxtLink to="/profile" class="btn btn-outline btn-sm">
-            <Icon name="lucide:user" size="14" /> Profile
+            <Icon name="fa6-solid:user" size="14" /> Profile
           </NuxtLink>
           <button class="btn btn-primary" @click="newProject">
-            <Icon name="lucide:plus" size="16" /> New Project
+            <Icon name="fa6-solid:plus" size="16" /> New Project
           </button>
         </div>
       </div>
@@ -203,19 +203,19 @@ function timeAgo(iso: string) {
 
       <div v-else-if="!projects.length" class="empty-state">
         <div class="empty-icon">
-          <Icon name="lucide:video" size="40" />
+          <Icon name="fa6-solid:video" size="40" />
         </div>
         <h2>No projects yet</h2>
         <p>Start a conversation with AI and create your first brand video.</p>
         <button class="btn btn-primary btn-lg" @click="newProject">
-          <Icon name="lucide:plus" size="16" /> Create Your First Video
+          <Icon name="fa6-solid:plus" size="16" /> Create Your First Video
         </button>
       </div>
 
       <div v-else class="projects-grid">
         <div class="project-card new-card" @click="newProject">
           <div class="new-card-inner">
-            <div class="new-icon"><Icon name="lucide:plus" size="28" /></div>
+            <div class="new-icon"><Icon name="fa6-solid:plus" size="28" /></div>
             <span>New Project</span>
           </div>
         </div>
@@ -229,10 +229,10 @@ function timeAgo(iso: string) {
           <div class="project-thumb">
             <img v-if="thumbUrl(p.thumbnail_key)" :src="thumbUrl(p.thumbnail_key)!" class="thumb-img" alt="" />
             <div v-else class="thumb-placeholder">
-              <Icon name="lucide:film" size="32" />
+              <Icon name="fa6-solid:film" size="32" />
             </div>
             <div class="thumb-overlay">
-              <Icon name="lucide:play" size="20" />
+              <Icon name="fa6-solid:play" size="20" />
             </div>
           </div>
 
@@ -245,24 +245,24 @@ function timeAgo(iso: string) {
                 aria-label="Project options"
                 @click.stop="toggleMenu(p.id)"
               >
-                <Icon name="lucide:more-vertical" size="16" />
+                <Icon name="fa6-solid:ellipsis-vertical" size="16" />
               </button>
             </div>
             <div v-if="openMenuId === p.id" class="card-menu" @click.stop>
               <button type="button" @click="clearProjectMedia(p.id, p.title)">
-                <Icon name="lucide:image-off" size="14" /> Clear images & video
+                <Icon name="fa6-solid:ban" size="14" /> Clear images & video
               </button>
               <button type="button" class="danger" @click="deleteProject(p.id, p.title)">
-                <Icon name="lucide:trash-2" size="14" /> Delete project
+                <Icon name="fa6-solid:trash" size="14" /> Delete project
               </button>
             </div>
             <div class="project-meta">
               <span class="meta-chip">
-                <Icon name="lucide:layout-list" size="11" />
+                <Icon name="fa6-solid:list" size="11" />
                 {{ p.scene_count }} scene{{ p.scene_count !== 1 ? 's' : '' }}
               </span>
               <span class="meta-time">
-                <Icon name="lucide:clock" size="11" />
+                <Icon name="fa6-solid:clock" size="11" />
                 {{ timeAgo(p.updated_at) }}
               </span>
             </div>
@@ -295,7 +295,7 @@ function timeAgo(iso: string) {
                     class="type-chip"
                     :class="{ active: form.videoType === t.value }"
                     @click="form.videoType = t.value"
-                  >{{ t.label }}</button>
+                  ><Icon :name="t.icon" size="13" class="chip-icon" /> {{ t.label }}</button>
                 </div>
               </div>
 
@@ -319,7 +319,7 @@ function timeAgo(iso: string) {
                 <div class="photo-zone" @click="newPhotoInputEl?.click()">
                   <img v-if="newPhotoPreview" :src="newPhotoPreview" class="photo-thumb" alt="" />
                   <div v-else class="photo-empty">
-                    <Icon name="lucide:camera" size="22" />
+                    <Icon name="fa6-solid:camera" size="22" />
                     <span>Upload your face photo</span>
                     <small>Used to generate your illustrated character</small>
                   </div>
@@ -332,7 +332,7 @@ function timeAgo(iso: string) {
                 class="btn btn-primary btn-full"
                 :disabled="creating || !form.videoType || !form.title.trim() || !form.purpose.trim()"
               >
-                <Icon name="lucide:sparkles" size="16" />
+                <Icon name="fa6-solid:wand-magic-sparkles" size="16" />
                 {{ creating ? 'Starting…' : 'Start Creating with AI →' }}
               </button>
             </form>
@@ -645,8 +645,10 @@ function timeAgo(iso: string) {
   border-radius: 10px; padding: 10px 12px;
   color: var(--text2); font-size: 13px; font-weight: 500;
   cursor: pointer; text-align: left;
+  display: flex; align-items: center; gap: 8px;
   transition: border-color 0.2s, color 0.2s, background 0.2s;
 }
+.chip-icon { flex-shrink: 0; opacity: 0.8; }
 .type-chip:hover { border-color: var(--accent); color: var(--text); }
 .type-chip.active {
   border-color: var(--accent);

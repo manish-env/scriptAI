@@ -177,7 +177,7 @@ onMounted(() => {
         </div>
         <div class="features-grid">
           <div v-for="f in features" :key="f.title" class="feature-card">
-            <div class="feature-icon">{{ f.icon }}</div>
+            <div class="feature-icon"><Icon :name="f.icon" /></div>
             <h3>{{ f.title }}</h3>
             <p>{{ f.desc }}</p>
           </div>
@@ -385,12 +385,12 @@ const mockScenes = [
 ]
 
 const features = [
-  { icon: '🤖', title: 'AI Strategy Chat', desc: 'Have a real conversation with Claude AI. It asks the right questions to build a compelling video concept tailored to your niche.' },
-  { icon: '🎭', title: 'Caricature Illustrations', desc: 'Upload your photo once. AI generates a unique illustrated version of you for every scene — your face, your style, no camera.' },
-  { icon: '📝', title: 'Auto Scene Scripting', desc: 'Claude analyzes your chat and writes a complete scene-by-scene script with narration, mood, and timing — ready to render.' },
-  { icon: '🎬', title: 'Ken Burns Video Export', desc: 'Your scenes are stitched into a smooth video with cinematic pan/zoom effects, narration overlays, and scene transitions.' },
-  { icon: '🔒', title: 'Privacy First', desc: 'Your profile stays on your device. No account required to start. Your data, your control.' },
-  { icon: '☁️', title: 'Cloud Storage', desc: 'All generated images and videos are stored securely in Cloudflare R2 — accessible anywhere, anytime.' },
+  { icon: 'fa6-solid:robot',               title: 'AI Strategy Chat',          desc: 'Have a real conversation with Claude AI. It asks the right questions to build a compelling video concept tailored to your niche.' },
+  { icon: 'fa6-solid:masks-theater',        title: 'Caricature Illustrations',   desc: 'Upload your photo once. AI generates a unique illustrated version of you for every scene — your face, your style, no camera.' },
+  { icon: 'fa6-solid:file-pen',             title: 'Auto Scene Scripting',       desc: 'Claude analyzes your chat and writes a complete scene-by-scene script with narration, mood, and timing — ready to render.' },
+  { icon: 'fa6-solid:film',                 title: 'Ken Burns Video Export',     desc: 'Your scenes are stitched into a smooth video with cinematic pan/zoom effects, narration overlays, and scene transitions.' },
+  { icon: 'fa6-solid:lock',                 title: 'Privacy First',              desc: 'Your profile stays on your device. No account required to start. Your data, your control.' },
+  { icon: 'fa6-solid:cloud',                title: 'Cloud Storage',              desc: 'All generated images and videos are stored securely in Cloudflare R2 — accessible anywhere, anytime.' },
 ]
 
 const steps = [
@@ -669,7 +669,16 @@ const footerLinks = [
   transition: border-color 0.2s, transform 0.2s;
 }
 .feature-card:hover { border-color: var(--accent); transform: translateY(-2px); }
-.feature-icon { font-size: 32px; margin-bottom: 16px; }
+.feature-icon {
+  width: 52px; height: 52px;
+  background: rgba(124, 92, 252, 0.1);
+  border: 1px solid rgba(124, 92, 252, 0.25);
+  border-radius: 14px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--accent);
+  font-size: 22px;
+  margin-bottom: 16px;
+}
 .feature-card h3 { font-size: 17px; font-weight: 700; margin-bottom: 10px; }
 .feature-card p { color: var(--text2); font-size: 14px; line-height: 1.6; }
 

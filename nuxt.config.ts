@@ -23,7 +23,7 @@ export default defineNuxtConfig({
   modules: ['@pinia/nuxt', '@nuxt/icon'],
 
   icon: {
-    serverBundle: { collections: ['lucide'] },
+    serverBundle: { collections: ['lucide', 'fa6-solid'] },
   },
 
   css: ['~/assets/css/main.css'],

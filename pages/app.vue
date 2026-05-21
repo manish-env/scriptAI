@@ -90,7 +90,7 @@ function formatScriptPreview(script: VideoScriptJson) {
   const scenes = script.scenes ?? []
   const lines = scenes.map((s, i) => `${i + 1}. **${s.title}** — ${(s.narration || '').slice(0, 80)}…`)
   return [
-    `📝 **Script outline** — "${script.title || 'Your video'}"`,
+    `**Script outline** — "${script.title || 'Your video'}"`,
     '',
     lines.join('\n') || '_No scenes yet._',
     '',
@@ -635,7 +635,7 @@ async function applyVideoScript(scriptJson: VideoScriptJson) {
     generatingLabel: null,
   }))
   aiTyping.value = false
-  const summary = `🎬 **Video script created!** "${scriptJson.title}"\n\n**${scriptJson.scenes.length} scenes** (each in its own setting):\n${scriptJson.scenes.map((s: Scene, i: number) => `${i + 1}. **${s.title}** — ${s.narration.slice(0, 60)}…`).join('\n')}\n\nOpen the storyboard and **Generate** — each scene gets **${FRAMES_PER_SCENE} flipbook pages** (same location, character moves as you flip). Ready?`
+  const summary = `**Video script created!** "${scriptJson.title}"\n\n**${scriptJson.scenes.length} scenes** (each in its own setting):\n${scriptJson.scenes.map((s: Scene, i: number) => `${i + 1}. **${s.title}** — ${s.narration.slice(0, 60)}…`).join('\n')}\n\nOpen the storyboard and **Generate** — each scene gets **${FRAMES_PER_SCENE} flipbook pages** (same location, character moves as you flip). Ready?`
   messages.value.push({ role: 'assistant', content: summary, suggestCreate: false })
   scrollToBottom()
   // Await so that scene IDs are written back before the user can click Generate.
@@ -1723,7 +1723,7 @@ onMounted(async () => {
     <div v-if="screen === 'onboard'" class="screen onboard-screen">
       <div class="onboard-hero">
         <NuxtLink to="/profile" class="back-link">
-          <Icon name="lucide:arrow-left" size="14" /> Profile
+          <Icon name="fa6-solid:arrow-left" size="14" /> Profile
         </NuxtLink>
         <BrandLogo :size="52" :wordmark="false" class="logo-mark" />
         <h1>BrandMe <span class="gradient-text">AI</span></h1>
@@ -1740,7 +1740,7 @@ onMounted(async () => {
           <input v-model="profile.niche" type="text" placeholder="e.g. Digital Marketing, Fitness, Finance" />
         </div>
         <button class="btn btn-primary btn-full" :disabled="!canStart" @click="startChat">
-          <Icon name="lucide:sparkles" size="16" /> Start Creating
+          <Icon name="fa6-solid:wand-magic-sparkles" size="16" /> Start Creating
         </button>
       </div>
     </div>
@@ -1751,7 +1751,7 @@ onMounted(async () => {
       <!-- LEFT: Chat panel -->
       <div class="chat-panel" :class="{ 'mobile-hidden': screen === 'preview' }">
         <header class="chat-header">
-          <NuxtLink to="/projects" class="icon-btn" title="All projects"><Icon name="lucide:arrow-left" size="18" /></NuxtLink>
+          <NuxtLink to="/projects" class="icon-btn" title="All projects"><Icon name="fa6-solid:arrow-left" size="18" /></NuxtLink>
           <div class="chat-header-info">
             <div class="avatar-sm">{{ profile.name[0] }}</div>
             <div>
@@ -1759,23 +1759,23 @@ onMounted(async () => {
               <div class="chat-sub">AI Video Strategist</div>
             </div>
           </div>
-          <button class="icon-btn" title="New video" @click="clearSession"><Icon name="lucide:plus" size="18" /></button>
+          <button class="icon-btn" title="New video" @click="clearSession"><Icon name="fa6-solid:plus" size="18" /></button>
           <div v-if="sessionId" class="project-menu-wrap">
             <button class="icon-btn" title="Project options" @click.stop="showProjectMenu = !showProjectMenu">
-              <Icon name="lucide:more-vertical" size="18" />
+              <Icon name="fa6-solid:ellipsis-vertical" size="18" />
             </button>
             <div v-if="showProjectMenu" class="project-menu" @click.stop>
               <button type="button" @click="clearProjectMedia">
-                <Icon name="lucide:image-off" size="16" /> Clear images & video
+                <Icon name="fa6-solid:ban" size="16" /> Clear images & video
               </button>
               <button type="button" class="danger" @click="deleteProject">
-                <Icon name="lucide:trash-2" size="16" /> Delete project
+                <Icon name="fa6-solid:trash" size="16" /> Delete project
               </button>
             </div>
           </div>
-          <NuxtLink to="/profile" class="icon-btn desktop-only" title="Profile"><Icon name="lucide:user" size="18" /></NuxtLink>
+          <NuxtLink to="/profile" class="icon-btn desktop-only" title="Profile"><Icon name="fa6-solid:user" size="18" /></NuxtLink>
           <button class="icon-btn mobile-only" :class="{ active: showVideoPanel }" @click="showVideoPanel = !showVideoPanel">
-            <Icon name="lucide:video" size="18" />
+            <Icon name="fa6-solid:video" size="18" />
           </button>
         </header>
 
@@ -1784,7 +1784,7 @@ onMounted(async () => {
           <div v-if="showVideoPanel && screen === 'chat'" class="video-panel mobile-only">
             <div class="video-panel-inner">
               <div v-if="!videoProject.scenes.length" class="empty-panel">
-                <Icon name="lucide:film" size="32" />
+                <Icon name="fa6-solid:film" size="32" />
                 <p>Chat about your topic, then say <strong>"create video"</strong> to generate your script.</p>
               </div>
               <div v-else>
@@ -1817,7 +1817,7 @@ onMounted(async () => {
                 <div class="msg-text" v-html="renderMd(displayChatContent(msg))" />
                 <div v-if="msg.role === 'assistant' && msg.suggestCreate" class="msg-action">
                   <button class="btn btn-sm btn-primary" @click="triggerVideoCreation">
-                    <Icon name="lucide:video" size="14" /> Create My Video
+                    <Icon name="fa6-solid:video" size="14" /> Create My Video
                   </button>
                 </div>
               </div>
@@ -1840,8 +1840,8 @@ onMounted(async () => {
             @input="autoResize"
           />
           <button class="send-btn" :disabled="!inputText.trim() || aiTyping" @click="sendMessage">
-            <Icon v-if="aiTyping" name="lucide:loader" size="18" class="spin" />
-            <Icon v-else name="lucide:send" size="18" />
+            <Icon v-if="aiTyping" name="fa6-solid:spinner" size="18" class="spin" />
+            <Icon v-else name="fa6-solid:paper-plane" size="18" />
           </button>
         </div>
       </div>
@@ -1849,9 +1849,9 @@ onMounted(async () => {
       <!-- RIGHT: Storyboard / video editor panel -->
       <div class="preview-panel" :class="{ 'mobile-active': screen === 'preview' }">
         <header class="storyboard-toolbar">
-          <button class="icon-btn mobile-only" @click="screen = 'chat'"><Icon name="lucide:arrow-left" size="18" /></button>
+          <button class="icon-btn mobile-only" @click="screen = 'chat'"><Icon name="fa6-solid:arrow-left" size="18" /></button>
           <div class="toolbar-brand">
-            <Icon name="lucide:clapperboard" size="18" class="toolbar-icon" />
+            <Icon name="fa6-solid:clapperboard" size="18" class="toolbar-icon" />
             <div class="toolbar-titles">
               <div class="chat-title">{{ videoProject.title || 'Storyboard' }}</div>
               <div class="chat-sub">
@@ -1867,7 +1867,7 @@ onMounted(async () => {
               title="Your voice is cloned — click to manage"
               @click="showVoiceWidget = !showVoiceWidget"
             >
-              <Icon name="lucide:mic" size="13" class="voice-icon-active" /> My Voice
+              <Icon name="fa6-solid:microphone" size="13" class="voice-icon-active" /> My Voice
             </button>
             <button
               v-else
@@ -1875,7 +1875,7 @@ onMounted(async () => {
               title="Record your voice to use it for all narrations"
               @click="showVoiceWidget = !showVoiceWidget"
             >
-              <Icon name="lucide:mic" size="13" /> Clone Voice
+              <Icon name="fa6-solid:microphone" size="13" /> Clone Voice
             </button>
             <button
               v-if="sessionId && videoProject.scenes.length && !allImagesReady"
@@ -1883,7 +1883,7 @@ onMounted(async () => {
               title="Reload saved images from cloud without regenerating"
               @click="restoreImages"
             >
-              <Icon name="lucide:refresh-cw" size="14" /> Restore saved
+              <Icon name="fa6-solid:rotate" size="14" /> Restore saved
             </button>
             <button
               v-if="!allImagesReady && videoProject.scenes.length"
@@ -1891,11 +1891,11 @@ onMounted(async () => {
               :disabled="generatingAll"
               @click="generateAllImages"
             >
-              <Icon name="lucide:sparkles" size="14" />
+              <Icon name="fa6-solid:wand-magic-sparkles" size="14" />
               {{ generatingAll ? 'Generating…' : `Generate all (${FRAMES_PER_SCENE} pages per scene)` }}
             </button>
             <button v-if="allImagesReady && !videoUrl" class="btn btn-sm btn-primary" :disabled="renderingVideo" @click="assembleVideo">
-              <Icon :name="renderingVideo ? 'lucide:loader' : 'lucide:film'" size="14" :class="{ spin: renderingVideo }" />
+              <Icon :name="renderingVideo ? 'fa6-solid:spinner' : 'fa6-solid:film'" size="14" :class="{ spin: renderingVideo }" />
               {{ renderingVideo ? 'Rendering…' : 'Render with voiceover' }}
             </button>
           </div>
@@ -1906,13 +1906,13 @@ onMounted(async () => {
           <div v-if="showVoiceWidget" class="voice-widget">
             <div class="voice-widget-inner">
               <div v-if="profile.elevenVoiceId" class="voice-ready">
-                <div class="voice-ready-icon"><Icon name="lucide:mic" size="20" /></div>
+                <div class="voice-ready-icon"><Icon name="fa6-solid:microphone" size="20" /></div>
                 <div>
                   <div class="voice-ready-label">Your voice is cloned</div>
                   <div class="voice-ready-sub">All voiceovers will use your voice automatically</div>
                 </div>
                 <button class="btn btn-sm btn-ghost" style="margin-left:auto;color:var(--error)" @click="deleteClonedVoice">
-                  <Icon name="lucide:trash-2" size="13" /> Remove
+                  <Icon name="fa6-solid:trash" size="13" /> Remove
                 </button>
               </div>
               <div v-else class="voice-record-ui">
@@ -1926,7 +1926,7 @@ onMounted(async () => {
                     :disabled="cloningVoice"
                     @click="startVoiceRecording"
                   >
-                    <Icon name="lucide:mic" size="14" /> Start Recording
+                    <Icon name="fa6-solid:microphone" size="14" /> Start Recording
                   </button>
                   <template v-else>
                     <div class="recording-indicator">
@@ -1934,7 +1934,7 @@ onMounted(async () => {
                       <span>Recording {{ recordingSeconds }}s</span>
                     </div>
                     <button class="btn btn-sm btn-outline" @click="stopVoiceRecording">
-                      <Icon name="lucide:square" size="13" /> Stop & Clone
+                      <Icon name="fa6-solid:square" size="13" /> Stop & Clone
                     </button>
                   </template>
                   <div v-if="cloningVoice" class="cloning-status">
@@ -1950,12 +1950,12 @@ onMounted(async () => {
         <div v-if="videoUrl" class="download-bar">
           <video :src="videoUrl" controls class="video-preview-mini" />
           <a :href="videoUrl" download="brand-video.webm" class="btn btn-primary btn-full mt-sm">
-            <Icon name="lucide:download" size="16" /> Download Video
+            <Icon name="fa6-solid:download" size="16" /> Download Video
           </a>
         </div>
 
         <div v-if="!videoProject.scenes.length" class="preview-empty">
-          <div class="preview-empty-icon"><Icon name="lucide:film" size="36" /></div>
+          <div class="preview-empty-icon"><Icon name="fa6-solid:film" size="36" /></div>
           <p>Chat with AI and say <strong>"create video"</strong> to build your storyboard here.</p>
         </div>
 
@@ -2003,13 +2003,13 @@ onMounted(async () => {
                     <span>{{ scene.generatingLabel || 'Creating frames…' }}</span>
                   </div>
                   <div v-else class="frame-placeholder clickable">
-                    <Icon name="lucide:layers" size="26" />
+                    <Icon name="fa6-solid:layer-group" size="26" />
                     <span>Generate {{ FRAMES_PER_SCENE }} pages</span>
                   </div>
                   <span class="frame-duration">{{ scene.duration }}s · {{ scene.frameUrls.length || 0 }}/{{ FRAMES_PER_SCENE }}</span>
                 </div>
                 <div class="frame-script-track">
-                  <Icon name="lucide:mic" size="12" class="track-icon" />
+                  <Icon name="fa6-solid:microphone" size="12" class="track-icon" />
                   <p class="frame-narration">{{ scene.narration }}</p>
                 </div>
                 <div class="frame-tags">
@@ -2021,7 +2021,7 @@ onMounted(async () => {
                     :disabled="scene.generating || generatingAll || sceneVideoLoading !== -1"
                     @click="scene.frameUrls.length >= FRAMES_PER_SCENE ? regenerateSceneFrames(i) : generateSceneFrames(i)"
                   >
-                    <Icon :name="scene.generating ? 'lucide:loader' : 'lucide:image'" size="11" :class="{ spin: scene.generating }" />
+                    <Icon :name="scene.generating ? 'fa6-solid:spinner' : 'fa6-solid:image'" size="11" :class="{ spin: scene.generating }" />
                     {{ scene.generating ? (scene.generatingLabel || 'Generating…') : scene.frameUrls.length >= FRAMES_PER_SCENE ? 'Regenerate' : 'Generate images' }}
                   </button>
                   <button
@@ -2030,7 +2030,7 @@ onMounted(async () => {
                     :disabled="sceneVideoLoading === i"
                     @click="assembleSceneVideo(i)"
                   >
-                    <Icon :name="sceneVideoLoading === i ? 'lucide:loader' : sceneVideoUrls[i] ? 'lucide:play-circle' : 'lucide:play'" size="11" :class="{ spin: sceneVideoLoading === i }" />
+                    <Icon :name="sceneVideoLoading === i ? 'fa6-solid:spinner' : sceneVideoUrls[i] ? 'fa6-solid:circle-play' : 'fa6-solid:play'" size="11" :class="{ spin: sceneVideoLoading === i }" />
                     {{ sceneVideoLoading === i ? 'Rendering…' : sceneVideoUrls[i] ? 'Play clip' : 'Preview clip' }}
                   </button>
                 </div>
@@ -2040,7 +2040,7 @@ onMounted(async () => {
 
           <div class="timeline-panel">
             <div class="timeline-header">
-              <span class="timeline-label"><Icon name="lucide:timer" size="13" /> Timeline</span>
+              <span class="timeline-label"><Icon name="fa6-solid:stopwatch" size="13" /> Timeline</span>
               <span class="timeline-total">{{ totalDuration }}s</span>
             </div>
             <div ref="timelineTrackRef" class="timeline-track">
@@ -2126,12 +2126,12 @@ onMounted(async () => {
                 <span class="inspector-badge">Scene {{ sceneVideoModal.index + 1 }}</span>
                 <strong style="margin-left:8px;font-size:14px;">{{ videoProject.scenes[sceneVideoModal.index]?.title }}</strong>
               </div>
-              <button class="icon-btn" @click="sceneVideoModal = null"><Icon name="lucide:x" size="16" /></button>
+              <button class="icon-btn" @click="sceneVideoModal = null"><Icon name="fa6-solid:xmark" size="16" /></button>
             </div>
             <video :src="sceneVideoModal.url" controls autoplay loop class="scene-modal-video" />
             <div class="scene-modal-footer">
               <a :href="sceneVideoModal.url" :download="`scene-${sceneVideoModal.index + 1}.webm`" class="btn btn-primary" style="flex:1">
-                <Icon name="lucide:download" size="14" /> Download Clip
+                <Icon name="fa6-solid:download" size="14" /> Download Clip
               </a>
               <button class="btn btn-outline" @click="sceneVideoModal = null">Close</button>
             </div>

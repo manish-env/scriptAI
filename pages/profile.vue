@@ -123,7 +123,7 @@ function signOut() {
     <header class="profile-header">
       <div class="container header-inner">
         <NuxtLink to="/projects" class="back-btn">
-          <Icon name="lucide:arrow-left" size="16" /> Projects
+          <Icon name="fa6-solid:arrow-left" size="16" /> Projects
         </NuxtLink>
         <BrandLogo />
       </div>
@@ -144,7 +144,7 @@ function signOut() {
             <div class="photo-upload" :class="{ 'has-photo': photoPreview }" @click="triggerPhoto">
               <img v-if="photoPreview" :src="photoPreview" class="photo-preview" alt="" />
               <div v-else class="photo-placeholder">
-                <Icon name="lucide:camera" size="28" />
+                <Icon name="fa6-solid:camera" size="28" />
                 <span>Tap to upload</span>
               </div>
             </div>
@@ -171,15 +171,15 @@ function signOut() {
         <div class="actions-card card">
           <h2>More</h2>
           <button class="action-row" @click="navigateTo('/projects')">
-            <Icon name="lucide:folder" size="18" />
+            <Icon name="fa6-solid:folder" size="18" />
             <span>
               <strong>My projects</strong>
               <small>Create and manage brand videos</small>
             </span>
-            <Icon name="lucide:chevron-right" size="18" class="chev" />
+            <Icon name="fa6-solid:chevron-right" size="18" class="chev" />
           </button>
           <button class="action-row danger" @click="signOut">
-            <Icon name="lucide:log-out" size="18" />
+            <Icon name="fa6-solid:right-from-bracket" size="18" />
             <span>
               <strong>Sign out</strong>
               <small>Clear this device session</small>
