@@ -1004,10 +1004,14 @@ function pickVideoMimeType() {
   return candidates.find(t => MediaRecorder.isTypeSupported(t)) || ''
 }
 
-async function waitVideoFrame(stream: MediaStream, fps: number) {
+async function waitVideoFrame(stream: MediaStream, fps: number, frameStartMs = performance.now()) {
   const track = stream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void }
   track?.requestFrame?.()
-  await new Promise<void>(r => setTimeout(r, 1000 / fps))
+  // Subtract actual draw time so total frame duration stays close to 1/fps.
+  // Without this each frame takes draw_time + 1/fps ms, making audio arrive early.
+  const elapsed = performance.now() - frameStartMs
+  const remaining = Math.max(0, 1000 / fps - elapsed)
+  await new Promise<void>(r => setTimeout(r, remaining))
 }
 
 function drawPaperBorder(ctx: CanvasRenderingContext2D, W: number, H: number) {
@@ -1092,18 +1096,20 @@ async function renderSceneFlipbook(
 
     // Animate Ken Burns across the hold (progress 0→1 with easing)
     for (let f = 0; f < holdPerPage; f++) {
+      const t0 = performance.now()
       const p = easeInOutCubic(f / Math.max(holdPerPage - 1, 1))
       drawSceneFrame(ctx, imgs[seg], W, H, p, motion)
       drawPaperBorder(ctx, W, H)
       drawSceneOverlays(ctx, scene, W, H, globalF, totalFrames)
       globalF++
-      await waitVideoFrame(stream, FPS)
+      await waitVideoFrame(stream, FPS, t0)
     }
 
     // Smooth crossfade to next page (no hard cut)
     if (seg < n - 1) {
       const nextMotion = MOTION_PRESETS[(seg + 1) % MOTION_PRESETS.length]
       for (let f = 0; f < FLIPBOOK_PAGE_FADE_FRAMES; f++) {
+        const t0 = performance.now()
         const blend = easeInOutCubic(f / FLIPBOOK_PAGE_FADE_FRAMES)
         drawSceneFrame(ctx, imgs[seg], W, H, 1, motion)
         ctx.save()
@@ -1113,7 +1119,7 @@ async function renderSceneFlipbook(
         drawPaperBorder(ctx, W, H)
         drawSceneOverlays(ctx, scene, W, H, globalF, totalFrames)
         globalF++
-        await waitVideoFrame(stream, FPS)
+        await waitVideoFrame(stream, FPS, t0)
       }
     }
   }
@@ -1321,25 +1327,20 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
   recorder.start(100)
   if (hasNarration && audioCtx) await sleep(80)
 
-  // Pre-schedule ALL narration clips at absolute AudioContext times before the render loop.
-  // This ties audio to the AudioContext clock (accurate, monotonic) rather than the render
-  // loop's execution speed (variable), eliminating cumulative drift across scenes.
-  // Scene durations were already expanded above so every clip plays at 1x speed.
-  if (hasNarration && audioCtx && audioDest) {
-    const recordAudioStart = audioCtx.currentTime
-    let cumFrames = 0
-    for (let si = 0; si < scenes.length; si++) {
-      const totalFrames = Math.max(FPS * 2, Math.floor(sceneDurationsSec[si] * FPS))
-      const contentStartFrame = si > 0 ? cumFrames + CROSSFADE_FRAMES : cumFrames
-      const buf = narrationBuffers[si]
-      if (buf && buf.duration > 0.05) {
-        const src = audioCtx.createBufferSource()
-        src.buffer = buf
-        src.connect(audioDest)
-        src.start(Math.max(audioCtx.currentTime, recordAudioStart + contentStartFrame / FPS))
-      }
-      cumFrames += totalFrames
-    }
+  // Fire each scene's narration INSIDE the render loop, immediately before the
+  // first content frame is captured. This ties audio to the actual video timeline
+  // (wall-clock render speed) rather than an assumed 30 fps — eliminating the
+  // cumulative drift that pre-scheduling caused when canvas rendering runs at
+  // ~25–27 fps instead of the target 30 fps.
+  function startSceneAudio(si: number) {
+    if (!audioCtx || !audioDest) return
+    const buf = narrationBuffers[si]
+    if (!buf || buf.duration < 0.05) return
+    const src = audioCtx.createBufferSource()
+    src.buffer = buf
+    // Scene duration was already expanded to cover the narration — always 1× speed.
+    src.connect(audioDest)
+    src.start(audioCtx.currentTime)
   }
 
   for (let si = 0; si < scenes.length; si++) {
@@ -1350,11 +1351,12 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
     const totalFrames = Math.max(FPS * 2, Math.floor(sceneDurationsSec[si] * FPS))
     const hasCrossfade = si > 0
 
-    // Crossfade transition from previous scene
+    // Crossfade transition from previous scene (audio NOT fired yet)
     if (hasCrossfade) {
       const prevImgs = sceneImages[si - 1]
       const prevImg = prevImgs[prevImgs.length - 1] ?? imgs[0]
       for (let f = 0; f < CROSSFADE_FRAMES; f++) {
+        const t0 = performance.now()
         const blend = easeInOutCubic(f / CROSSFADE_FRAMES)
         const prevMotion = MOTION_PRESETS[(si - 1) % MOTION_PRESETS.length]
         drawSceneFrame(ctx, prevImg, W, H, 1, prevMotion)
@@ -1364,9 +1366,13 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
         ctx.restore()
         drawPaperBorder(ctx, W, H)
         drawSceneOverlays(ctx, scene, W, H, f, totalFrames)
-        await waitVideoFrame(videoStream, FPS)
+        await waitVideoFrame(videoStream, FPS, t0)
       }
     }
+
+    // Fire audio exactly here — crossfade done, first content frame is next.
+    // audioCtx.currentTime is real wall-clock, matching the video frame timestamp.
+    startSceneAudio(si)
 
     const contentFrames = hasCrossfade ? totalFrames - CROSSFADE_FRAMES : totalFrames
 
@@ -1376,12 +1382,13 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
     } else {
       const startF = hasCrossfade ? CROSSFADE_FRAMES : 0
       for (let f = startF; f < totalFrames; f++) {
+        const t0 = performance.now()
         const localF = f - startF
         const progress = easeInOutCubic(localF / Math.max(contentFrames - 1, 1))
         drawSceneFrame(ctx, imgs[0], W, H, progress, motion)
         drawPaperBorder(ctx, W, H)
         drawSceneOverlays(ctx, scene, W, H, f, totalFrames)
-        await waitVideoFrame(videoStream, FPS)
+        await waitVideoFrame(videoStream, FPS, t0)
       }
     }
   }
