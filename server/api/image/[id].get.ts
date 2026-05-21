@@ -1,12 +1,25 @@
-interface Env { NUXT_REPLICATE_API_KEY: string }
+import { createError } from 'h3'
+import { getReplicateApiKey } from '../../utils/secrets'
 
 export default defineEventHandler(async (event) => {
-  const config = useRuntimeConfig()
-  const env = (event.context.cloudflare?.env ?? {}) as Env
-  const apiKey = config.replicateApiKey || env.NUXT_REPLICATE_API_KEY
+  const apiKey = getReplicateApiKey(event)
   const id = getRouterParam(event, 'id')
 
-  return $fetch<unknown>(`https://api.replicate.com/v1/predictions/${id}`, {
-    headers: { 'Authorization': `Bearer ${apiKey}` },
-  })
+  try {
+    return await $fetch<unknown>(`https://api.replicate.com/v1/predictions/${id}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    })
+  } catch (e: unknown) {
+    const err = e as { statusCode?: number; data?: { detail?: string } }
+    if (err.statusCode === 401) {
+      throw createError({
+        statusCode: 401,
+        message: 'Replicate rejected the API key. Check REPLICATE_API_KEY is valid (starts with r8_).',
+      })
+    }
+    throw createError({
+      statusCode: err.statusCode || 502,
+      message: err.data?.detail || 'Replicate status check failed',
+    })
+  }
 })

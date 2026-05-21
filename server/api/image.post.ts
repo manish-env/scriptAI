@@ -1,22 +1,30 @@
 import { createError } from 'h3'
-
-interface Env { NUXT_REPLICATE_API_KEY: string }
+import { getReplicateApiKey } from '../utils/secrets'
 
 export default defineEventHandler(async (event) => {
-  const config = useRuntimeConfig()
-  const env = (event.context.cloudflare?.env ?? {}) as Env
-  const apiKey = config.replicateApiKey || env.NUXT_REPLICATE_API_KEY
-  if (!apiKey) throw createError({ statusCode: 500, message: 'REPLICATE_API_KEY not configured' })
+  const apiKey = getReplicateApiKey(event)
   const body = await readBody(event)
 
-  const res = await $fetch<unknown>('https://api.replicate.com/v1/predictions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body,
-  })
-
-  return res
+  try {
+    return await $fetch<unknown>('https://api.replicate.com/v1/predictions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body,
+    })
+  } catch (e: unknown) {
+    const err = e as { statusCode?: number; data?: { detail?: string } }
+    if (err.statusCode === 401) {
+      throw createError({
+        statusCode: 401,
+        message: 'Replicate rejected the API key. Check REPLICATE_API_KEY is valid (starts with r8_).',
+      })
+    }
+    throw createError({
+      statusCode: err.statusCode || 502,
+      message: err.data?.detail || 'Replicate image request failed',
+    })
+  }
 })

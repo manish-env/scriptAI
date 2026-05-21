@@ -1,3 +1,18 @@
+import { existsSync, readFileSync } from 'node:fs'
+
+// Wrangler uses .dev.vars; load into process.env so `nuxt dev` sees the same keys.
+if (existsSync('.dev.vars')) {
+  for (const line of readFileSync('.dev.vars', 'utf8').split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const eq = trimmed.indexOf('=')
+    if (eq === -1) continue
+    const name = trimmed.slice(0, eq).trim()
+    const value = trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, '')
+    if (name && process.env[name] === undefined) process.env[name] = value
+  }
+}
+
 export default defineNuxtConfig({
   compatibilityDate: '2024-11-01',
 
@@ -14,8 +29,8 @@ export default defineNuxtConfig({
   css: ['~/assets/css/main.css'],
 
   runtimeConfig: {
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-    replicateApiKey: process.env.REPLICATE_API_KEY,
+    anthropicApiKey: process.env.NUXT_ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY,
+    replicateApiKey: process.env.NUXT_REPLICATE_API_KEY || process.env.REPLICATE_API_KEY,
   },
 
   app: {

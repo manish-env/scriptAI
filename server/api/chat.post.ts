@@ -1,11 +1,7 @@
-interface Env { NUXT_ANTHROPIC_API_KEY: string }
+import { getAnthropicApiKey } from '../utils/secrets'
 
 export default defineEventHandler(async (event) => {
-  const config = useRuntimeConfig()
-  const env = (event.context.cloudflare?.env ?? {}) as Env
-  const apiKey = config.anthropicApiKey || env.NUXT_ANTHROPIC_API_KEY
-
-  if (!apiKey) throw createError({ statusCode: 500, message: 'ANTHROPIC_API_KEY not configured' })
+  const apiKey = getAnthropicApiKey(event)
 
   const body = await readBody(event)
 
