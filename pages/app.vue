@@ -1452,6 +1452,11 @@ async function assembleSceneVideo(index: number) {
     showToastMsg('Generate images for this scene first', 'error')
     return
   }
+  // Already rendered — just reopen the modal, no re-render needed
+  if (sceneVideoUrls.value[index]) {
+    sceneVideoModal.value = { index, url: sceneVideoUrls.value[index] }
+    return
+  }
   if (sceneVideoLoading.value !== -1) return
   sceneVideoLoading.value = index
   showToastMsg(`Scene ${index + 1}: generating voiceover…`)
@@ -2041,8 +2046,8 @@ onMounted(async () => {
                     :disabled="sceneVideoLoading === i"
                     @click="assembleSceneVideo(i)"
                   >
-                    <Icon :name="sceneVideoLoading === i ? 'lucide:loader' : 'lucide:play'" size="11" :class="{ spin: sceneVideoLoading === i }" />
-                    {{ sceneVideoLoading === i ? 'Rendering…' : 'Preview clip' }}
+                    <Icon :name="sceneVideoLoading === i ? 'lucide:loader' : sceneVideoUrls[i] ? 'lucide:play-circle' : 'lucide:play'" size="11" :class="{ spin: sceneVideoLoading === i }" />
+                    {{ sceneVideoLoading === i ? 'Rendering…' : sceneVideoUrls[i] ? 'Play clip' : 'Preview clip' }}
                   </button>
                 </div>
               </div>
