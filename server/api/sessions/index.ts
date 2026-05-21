@@ -9,9 +9,16 @@ export default defineEventHandler(async (event) => {
     const user_id = getQuery(event).user_id as string
     if (!user_id) throw createError({ statusCode: 400, message: 'user_id required' })
     if (!env.DB) return []
-    const { results } = await env.DB.prepare(
-      'SELECT * FROM sessions WHERE user_id = ? ORDER BY updated_at DESC'
-    ).bind(user_id).all()
+    const { results } = await env.DB.prepare(`
+      SELECT s.id, s.title, s.topic, s.created_at, s.updated_at,
+        COUNT(sc.id) as scene_count,
+        (SELECT sc2.image_key FROM scenes sc2 WHERE sc2.session_id = s.id ORDER BY sc2.position ASC LIMIT 1) as thumbnail_key
+      FROM sessions s
+      LEFT JOIN scenes sc ON sc.session_id = s.id
+      WHERE s.user_id = ?
+      GROUP BY s.id
+      ORDER BY s.updated_at DESC
+    `).bind(user_id).all()
     return results
   }
 

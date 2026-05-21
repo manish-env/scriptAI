@@ -5,19 +5,19 @@ const authModal = ref<'login' | 'signup' | null>(null)
 const navOpen = ref(false)
 
 function goToApp() {
-  navigateTo('/app')
+  navigateTo('/projects')
 }
 
 function handleLogin(e: Event) {
   e.preventDefault()
-  navigateTo('/app')
+  navigateTo('/projects')
 }
 
 function handleSignup(e: Event) {
   e.preventDefault()
   const name = (document.getElementById('signupName') as HTMLInputElement)?.value
   if (name) localStorage.setItem('bm_pending_name', name)
-  navigateTo('/app')
+  navigateTo('/projects')
 }
 
 // Close modal on overlay click

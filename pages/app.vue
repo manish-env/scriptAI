@@ -19,11 +19,16 @@ interface Message {
   suggestCreate?: boolean
 }
 
-// ── Storage ────────────────────────────────────────────────────────────────
-const LS = {
-  get: <T>(k: string, fb: T) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) as T : fb } catch { return fb } },
-  set: (k: string, v: unknown) => { try { localStorage.setItem(k, JSON.stringify(v)) } catch { /**/ } },
-  del: (k: string) => localStorage.removeItem(k),
+interface DbScene {
+  id: string; session_id: string; position: number
+  title: string; narration: string; image_prompt: string
+  duration: number; mood: string; image_key: string | null
+}
+
+interface DbSession {
+  id: string; title: string | null; topic: string | null
+  messages: { id: string; role: string; content: string }[]
+  scenes: DbScene[]
 }
 
 // ── State ──────────────────────────────────────────────────────────────────
@@ -50,27 +55,7 @@ const toast = reactive({ show: false, message: '', type: 'success' })
 const canStart = computed(() => profile.name.trim() && profile.niche.trim())
 const allImagesReady = computed(() => videoProject.scenes.length > 0 && videoProject.scenes.every(s => s.imageUrl))
 
-// ── Persistence ────────────────────────────────────────────────────────────
-function saveAll() {
-  LS.set('bm_profile', { name: profile.name, niche: profile.niche, photoUrl: profile.photoUrl, photoBase64: profile.photoBase64 })
-  LS.set('bm_messages', messages.value)
-  LS.set('bm_project', { title: videoProject.title, topic: videoProject.topic, scenes: videoProject.scenes.map(s => ({ ...s, generating: false })) })
-}
-
-function loadAll() {
-  const p = LS.get<typeof profile>('bm_profile', { name: '', niche: '', photoUrl: null, photoBase64: null })
-  Object.assign(profile, p)
-  const msgs = LS.get<Message[]>('bm_messages', [])
-  if (msgs.length) { messages.value = msgs; screen.value = 'chat' }
-  const proj = LS.get<{ title: string; topic: string; scenes: Scene[] }>('bm_project', { title: '', topic: '', scenes: [] })
-  videoProject.title = proj.title; videoProject.topic = proj.topic
-  videoProject.scenes = proj.scenes.map(s => ({ ...s, generating: false }))
-  if (p.name && p.niche && !msgs.length) screen.value = 'chat'
-  userId.value = LS.get<string>('bm_user_id', '')
-  sessionId.value = LS.get<string>('bm_session_id', '')
-}
-
-// ── Cloud sync ─────────────────────────────────────────────────────────────
+// ── API helpers ────────────────────────────────────────────────────────────
 async function dbPost(path: string, body: unknown) {
   try { await $fetch(path, { method: 'POST', body }) } catch (e) { console.warn('sync failed', e) }
 }
@@ -79,14 +64,16 @@ async function dbPatch(path: string, body: unknown) {
 }
 
 async function ensureUser() {
-  if (!userId.value) { userId.value = crypto.randomUUID(); LS.set('bm_user_id', userId.value) }
   await dbPost('/api/user', { id: userId.value, name: profile.name, niche: profile.niche })
 }
 
 async function ensureSession() {
   if (!sessionId.value) {
     const res = await $fetch<{ id: string }>('/api/sessions', { method: 'POST', body: { user_id: userId.value } }).catch(() => null)
-    if (res?.id) { sessionId.value = res.id; LS.set('bm_session_id', sessionId.value) }
+    if (res?.id) {
+      sessionId.value = res.id
+      localStorage.setItem('bm_active_session', res.id)
+    }
   }
 }
 
@@ -94,11 +81,13 @@ function syncMessages(msgs: { role: string; content: string }[]) {
   if (!sessionId.value) return
   dbPost(`/api/sessions/${sessionId.value}/messages`, { messages: msgs })
 }
+
 function syncScenes(scenes: Scene[]) {
   if (!sessionId.value) return
   dbPost(`/api/sessions/${sessionId.value}/scenes`, { scenes })
   dbPatch(`/api/sessions/${sessionId.value}`, { title: videoProject.title, topic: videoProject.topic })
 }
+
 async function uploadSceneImage(replicateUrl: string, sceneId?: string) {
   if (!userId.value || !sessionId.value) return replicateUrl
   try {
@@ -111,6 +100,37 @@ async function uploadSceneImage(replicateUrl: string, sceneId?: string) {
     }
   } catch { /* fall through */ }
   return replicateUrl
+}
+
+// ── Load existing session from D1 ──────────────────────────────────────────
+async function loadSession(id: string) {
+  try {
+    const data = await $fetch<DbSession>(`/api/sessions/${id}`)
+    if (!data) return false
+
+    videoProject.title = data.title ?? ''
+    videoProject.topic = data.topic ?? ''
+    messages.value = data.messages.map(m => ({
+      role: m.role as 'user' | 'assistant',
+      content: m.content,
+      suggestCreate: false,
+    }))
+    videoProject.scenes = data.scenes.map(s => ({
+      id: s.id,
+      title: s.title,
+      narration: s.narration,
+      imagePrompt: s.image_prompt,
+      duration: s.duration,
+      mood: s.mood,
+      imageUrl: s.image_key ? `/api/assets/${s.image_key}` : null,
+      generating: false,
+    }))
+    if (videoProject.scenes.length) showVideoPanel.value = true
+    return true
+  } catch {
+    localStorage.removeItem('bm_active_session')
+    return false
+  }
 }
 
 // ── Onboarding ─────────────────────────────────────────────────────────────
@@ -128,6 +148,10 @@ function onPhotoSelected(e: Event) {
 }
 
 async function startChat() {
+  if (!userId.value) {
+    userId.value = crypto.randomUUID()
+    localStorage.setItem('bm_user_id', userId.value)
+  }
   screen.value = 'chat'
   messages.value = []
   const greeting = `Hi ${profile.name}! 👋 I'm your AI brand strategist. I'll help you create a stunning personal brand video in the **${profile.niche}** space — without showing your face on camera.\n\nLet's start: **What's the main message or story you want your audience to take away from this video?**\n\nFeel free to share your ideas, your audience, what transformation you offer — the more you tell me, the better your video will be!`
@@ -198,7 +222,7 @@ async function triggerVideoCreation() {
     videoProject.topic = scriptJson.topic
     videoProject.scenes = scriptJson.scenes.map((s: Scene) => ({ ...s, imageUrl: null, generating: false }))
     aiTyping.value = false
-    const summary = `🎬 **Video script created!** "${scriptJson.title}"\n\nI've written **${scriptJson.scenes.length} scenes** for your video:\n${scriptJson.scenes.map((s: Scene, i: number) => `${i + 1}. **${s.title}** — ${s.narration.slice(0, 60)}…`).join('\n')}\n\nTap the **🎬 button** above to see your scenes and generate illustrated images for each one. Ready?`
+    const summary = `🎬 **Video script created!** "${scriptJson.title}"\n\nI've written **${scriptJson.scenes.length} scenes** for your video:\n${scriptJson.scenes.map((s: Scene, i: number) => `${i + 1}. **${s.title}** — ${s.narration.slice(0, 60)}…`).join('\n')}\n\nTap the **video button** above to see your scenes and generate illustrated images for each one. Ready?`
     messages.value.push({ role: 'assistant', content: summary, suggestCreate: false })
     scrollToBottom()
     syncScenes(scriptJson.scenes)
@@ -362,11 +386,20 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 // ── Session Management ─────────────────────────────────────────────────────
 function clearSession() {
   if (!confirm('Start a new video? This will clear the current chat and script.')) return
-  LS.del('bm_messages'); LS.del('bm_project'); LS.del('bm_session_id')
-  sessionId.value = null; messages.value = []
+  localStorage.removeItem('bm_active_session')
+  sessionId.value = null
+  messages.value = []
   videoProject.title = ''; videoProject.topic = ''; videoProject.scenes = []
   videoUrl.value = null; showVideoPanel.value = false
-  startChat()
+
+  if (profile.name && profile.niche) {
+    screen.value = 'chat'
+    const greeting = `Welcome back, ${profile.name}! Ready to create another brand video? Tell me about your next idea!`
+    messages.value = [{ role: 'assistant', content: greeting, suggestCreate: false }]
+    ensureSession()
+  } else {
+    screen.value = 'onboard'
+  }
 }
 
 // ── Markdown renderer ──────────────────────────────────────────────────────
@@ -397,16 +430,48 @@ function showToastMsg(message: string, type = 'success') {
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
 
 // ── Init ───────────────────────────────────────────────────────────────────
-onMounted(() => {
-  loadAll()
-  const pending = localStorage.getItem('bm_pending_name')
-  if (pending) { profile.name = pending; localStorage.removeItem('bm_pending_name') }
-  watch([() => ({ ...profile }), messages, () => ({ ...videoProject, scenes: videoProject.scenes.map(s => ({ ...s })) })], saveAll, { deep: true })
+onMounted(async () => {
+  const uid = localStorage.getItem('bm_user_id')
+  const activeSession = localStorage.getItem('bm_active_session')
+
+  if (!uid) return // stay on onboard
+
+  userId.value = uid
+
+  // Load user profile from D1
+  const user = await $fetch<{ id: string; name: string; niche: string; photo_key: string | null } | null>(
+    `/api/user?id=${uid}`
+  ).catch(() => null)
+
+  if (user?.name) {
+    profile.name = user.name
+    profile.niche = user.niche ?? ''
+    if (user.photo_key) profile.photoUrl = `/api/assets/${user.photo_key}`
+  }
+
+  // Load existing session if one was set from projects page
+  if (activeSession) {
+    sessionId.value = activeSession
+    const loaded = await loadSession(activeSession)
+    if (loaded && messages.value.length) {
+      screen.value = 'chat'
+      nextTick(scrollToBottom)
+      return
+    }
+  }
+
+  // If profile exists, skip onboard and start a fresh chat
+  if (user?.name && user?.niche) {
+    screen.value = 'chat'
+    const greeting = `Welcome back, ${user.name}! Ready to create another brand video? Tell me about your next idea!`
+    messages.value = [{ role: 'assistant', content: greeting, suggestCreate: false }]
+    await ensureSession()
+  }
 })
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :class="{ 'has-scenes': videoProject.scenes.length > 0 && screen !== 'onboard' }">
 
     <!-- ── ONBOARD ── -->
     <div v-if="screen === 'onboard'" class="screen onboard-screen">
@@ -442,147 +507,170 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- ── CHAT ── -->
-    <div v-if="screen === 'chat'" class="screen chat-screen">
-      <header class="chat-header">
-        <button class="icon-btn" @click="screen = 'onboard'"><Icon name="lucide:arrow-left" size="18" /></button>
-        <div class="chat-header-info">
-          <div class="avatar-sm">{{ profile.name[0] }}</div>
-          <div>
-            <div class="chat-title">Brand Video Chat</div>
-            <div class="chat-sub">AI Video Strategist</div>
-          </div>
-        </div>
-        <button class="icon-btn" title="New video" @click="clearSession"><Icon name="lucide:plus" size="18" /></button>
-        <button class="icon-btn" :class="{ active: showVideoPanel }" @click="showVideoPanel = !showVideoPanel">
-          <Icon name="lucide:video" size="18" />
-        </button>
-      </header>
+    <!-- ── CHAT + PREVIEW (desktop split layout) ── -->
+    <div v-if="screen === 'chat' || screen === 'preview'" class="workspace">
 
-      <!-- Video panel -->
-      <Transition name="slide-down">
-        <div v-if="showVideoPanel" class="video-panel">
-          <div class="video-panel-inner">
-            <div v-if="!videoProject.scenes.length" class="empty-panel">
-              <Icon name="lucide:film" size="32" />
-              <p>Chat about your topic, then say <strong>"create video"</strong> to generate your script.</p>
+      <!-- LEFT: Chat panel -->
+      <div class="chat-panel" :class="{ 'mobile-hidden': screen === 'preview' }">
+        <header class="chat-header">
+          <NuxtLink to="/projects" class="icon-btn" title="All projects"><Icon name="lucide:arrow-left" size="18" /></NuxtLink>
+          <div class="chat-header-info">
+            <div class="avatar-sm">{{ profile.name[0] }}</div>
+            <div>
+              <div class="chat-title">{{ videoProject.title || 'Brand Video Chat' }}</div>
+              <div class="chat-sub">AI Video Strategist</div>
             </div>
-            <div v-else>
-              <div class="panel-header">
-                <span>{{ videoProject.title || 'Untitled Video' }}</span>
-                <button class="btn btn-sm btn-outline" @click="screen = 'preview'">Preview →</button>
+          </div>
+          <button class="icon-btn" title="New video" @click="clearSession"><Icon name="lucide:plus" size="18" /></button>
+          <button class="icon-btn mobile-only" :class="{ active: showVideoPanel }" @click="showVideoPanel = !showVideoPanel">
+            <Icon name="lucide:video" size="18" />
+          </button>
+        </header>
+
+        <!-- Mobile video panel -->
+        <Transition name="slide-down">
+          <div v-if="showVideoPanel && screen === 'chat'" class="video-panel mobile-only">
+            <div class="video-panel-inner">
+              <div v-if="!videoProject.scenes.length" class="empty-panel">
+                <Icon name="lucide:film" size="32" />
+                <p>Chat about your topic, then say <strong>"create video"</strong> to generate your script.</p>
               </div>
-              <div class="scenes-mini">
-                <div v-for="(s, i) in videoProject.scenes" :key="i" class="scene-mini-card" @click="screen = 'preview'">
-                  <div class="scene-num">{{ i + 1 }}</div>
-                  <div class="scene-mini-info">
-                    <div class="scene-mini-title">{{ s.title }}</div>
-                    <div class="scene-mini-status">
-                      <span class="status-dot" :class="s.imageUrl ? 'done' : s.generating ? 'loading' : 'pending'" />
-                      {{ s.imageUrl ? 'Ready' : s.generating ? 'Generating…' : 'Pending' }}
+              <div v-else>
+                <div class="panel-header">
+                  <span>{{ videoProject.title || 'Untitled Video' }}</span>
+                  <button class="btn btn-sm btn-outline" @click="screen = 'preview'">Preview →</button>
+                </div>
+                <div class="scenes-mini">
+                  <div v-for="(s, i) in videoProject.scenes" :key="i" class="scene-mini-card" @click="screen = 'preview'">
+                    <div class="scene-num">{{ i + 1 }}</div>
+                    <div class="scene-mini-info">
+                      <div class="scene-mini-title">{{ s.title }}</div>
+                      <div class="scene-mini-status">
+                        <span class="status-dot" :class="s.imageUrl ? 'done' : s.generating ? 'loading' : 'pending'" />
+                        {{ s.imageUrl ? 'Ready' : s.generating ? 'Generating…' : 'Pending' }}
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
-              <button v-if="allImagesReady" class="btn btn-primary btn-full mt-sm" @click="screen = 'preview'">
-                <Icon name="lucide:play" size="15" /> Assemble Video
-              </button>
             </div>
           </div>
-        </div>
-      </Transition>
+        </Transition>
 
-      <!-- Messages -->
-      <div ref="messagesWrap" class="messages-wrap">
-        <div class="messages">
-          <div v-for="(msg, i) in messages" :key="i" class="msg-row" :class="msg.role">
-            <div class="msg-bubble" :class="msg.role">
-              <div class="msg-text" v-html="renderMd(msg.content)" />
-              <div v-if="msg.role === 'assistant' && msg.suggestCreate" class="msg-action">
-                <button class="btn btn-sm btn-primary" @click="triggerVideoCreation">
-                  <Icon name="lucide:video" size="14" /> Create My Video
-                </button>
+        <!-- Messages -->
+        <div ref="messagesWrap" class="messages-wrap">
+          <div class="messages">
+            <div v-for="(msg, i) in messages" :key="i" class="msg-row" :class="msg.role">
+              <div class="msg-bubble" :class="msg.role">
+                <div class="msg-text" v-html="renderMd(msg.content)" />
+                <div v-if="msg.role === 'assistant' && msg.suggestCreate" class="msg-action">
+                  <button class="btn btn-sm btn-primary" @click="triggerVideoCreation">
+                    <Icon name="lucide:video" size="14" /> Create My Video
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div v-if="aiTyping" class="msg-row assistant">
+              <div class="msg-bubble assistant typing-indicator">
+                <span /><span /><span />
               </div>
             </div>
           </div>
-          <div v-if="aiTyping" class="msg-row assistant">
-            <div class="msg-bubble assistant typing-indicator">
-              <span /><span /><span />
-            </div>
-          </div>
         </div>
-      </div>
 
-      <div class="input-bar">
-        <textarea
-          ref="chatInputEl"
-          v-model="inputText"
-          placeholder="Ask about your video, share ideas…"
-          rows="1"
-          @keydown.enter.exact.prevent="sendMessage"
-          @input="autoResize"
-        />
-        <button class="send-btn" :disabled="!inputText.trim() || aiTyping" @click="sendMessage">
-          <Icon v-if="aiTyping" name="lucide:loader" size="18" class="spin" />
-          <Icon v-else name="lucide:send" size="18" />
-        </button>
-      </div>
-    </div>
-
-    <!-- ── PREVIEW ── -->
-    <div v-if="screen === 'preview'" class="screen preview-screen">
-      <header class="chat-header">
-        <button class="icon-btn" @click="screen = 'chat'"><Icon name="lucide:arrow-left" size="18" /></button>
-        <div class="chat-header-info">
-          <div>
-            <div class="chat-title">{{ videoProject.title || 'Your Video' }}</div>
-            <div class="chat-sub">{{ videoProject.scenes.length }} scenes</div>
-          </div>
-        </div>
-        <button v-if="allImagesReady && !videoUrl" class="btn btn-sm btn-primary" @click="assembleVideo">Render</button>
-      </header>
-
-      <!-- Download bar -->
-      <div v-if="videoUrl" class="download-bar">
-        <video :src="videoUrl" controls class="video-preview-mini" />
-        <a :href="videoUrl" download="brand-video.webm" class="btn btn-primary btn-full mt-sm">
-          <Icon name="lucide:download" size="16" /> Download Video
-        </a>
-      </div>
-
-      <div ref="previewContent" class="preview-content">
-        <div class="scenes-list">
-          <div v-for="(scene, i) in videoProject.scenes" :key="i" class="scene-card">
-            <div class="scene-card-header">
-              <div class="scene-badge">Scene {{ i + 1 }}</div>
-              <div class="scene-card-title">{{ scene.title }}</div>
-            </div>
-            <div class="scene-image-wrap">
-              <img v-if="scene.imageUrl" :src="scene.imageUrl" class="scene-img" />
-              <div v-else-if="scene.generating" class="scene-img-placeholder generating">
-                <div class="spinner" /><span>Generating image…</span>
-              </div>
-              <div v-else class="scene-img-placeholder" @click="generateSceneImage(i)">
-                <Icon name="lucide:image" size="28" /><span>Tap to generate</span>
-              </div>
-            </div>
-            <div class="scene-script">
-              <p class="scene-narration">{{ scene.narration }}</p>
-              <div class="scene-meta">
-                <span class="scene-tag">{{ scene.duration }}s</span>
-                <span class="scene-tag">{{ scene.mood }}</span>
-              </div>
-              <div class="scene-prompt-label">Image prompt</div>
-              <p class="scene-prompt-text">{{ scene.imagePrompt }}</p>
-            </div>
-          </div>
-        </div>
-        <div v-if="!allImagesReady && videoProject.scenes.length" class="generate-all-wrap">
-          <button class="btn btn-primary btn-full" :disabled="generatingAll" @click="generateAllImages">
-            {{ generatingAll ? 'Generating Images…' : '🎨 Generate All Scene Images' }}
+        <div class="input-bar">
+          <textarea
+            ref="chatInputEl"
+            v-model="inputText"
+            placeholder="Ask about your video, share ideas…"
+            rows="1"
+            @keydown.enter.exact.prevent="sendMessage"
+            @input="autoResize"
+          />
+          <button class="send-btn" :disabled="!inputText.trim() || aiTyping" @click="sendMessage">
+            <Icon v-if="aiTyping" name="lucide:loader" size="18" class="spin" />
+            <Icon v-else name="lucide:send" size="18" />
           </button>
         </div>
       </div>
+
+      <!-- RIGHT: Preview / Scenes panel -->
+      <div class="preview-panel" :class="{ 'mobile-active': screen === 'preview' }">
+        <header class="chat-header">
+          <button class="icon-btn mobile-only" @click="screen = 'chat'"><Icon name="lucide:arrow-left" size="18" /></button>
+          <div class="chat-header-info desktop-only">
+            <Icon name="lucide:layout-list" size="16" style="color: var(--text2)" />
+            <div>
+              <div class="chat-title">{{ videoProject.title || 'Scenes' }}</div>
+              <div class="chat-sub">{{ videoProject.scenes.length }} scene{{ videoProject.scenes.length !== 1 ? 's' : '' }}</div>
+            </div>
+          </div>
+          <div class="chat-header-info mobile-only">
+            <div>
+              <div class="chat-title">{{ videoProject.title || 'Your Video' }}</div>
+              <div class="chat-sub">{{ videoProject.scenes.length }} scenes</div>
+            </div>
+          </div>
+          <button v-if="allImagesReady && !videoUrl" class="btn btn-sm btn-primary" @click="assembleVideo">
+            <Icon name="lucide:film" size="14" /> Render
+          </button>
+        </header>
+
+        <!-- Download / video player -->
+        <div v-if="videoUrl" class="download-bar">
+          <video :src="videoUrl" controls class="video-preview-mini" />
+          <a :href="videoUrl" download="brand-video.webm" class="btn btn-primary btn-full mt-sm">
+            <Icon name="lucide:download" size="16" /> Download Video
+          </a>
+        </div>
+
+        <!-- Empty state for right panel on desktop -->
+        <div v-if="!videoProject.scenes.length" class="preview-empty">
+          <div class="preview-empty-icon"><Icon name="lucide:film" size="36" /></div>
+          <p>Chat with AI and say <strong>"create video"</strong> to generate your script and scenes here.</p>
+        </div>
+
+        <!-- Scenes list -->
+        <div v-else ref="previewContent" class="preview-content">
+          <div class="scenes-list">
+            <div v-for="(scene, i) in videoProject.scenes" :key="i" class="scene-card">
+              <div class="scene-card-header">
+                <div class="scene-badge">Scene {{ i + 1 }}</div>
+                <div class="scene-card-title">{{ scene.title }}</div>
+                <div class="scene-status-chip" :class="scene.imageUrl ? 'done' : scene.generating ? 'loading' : 'pending'">
+                  <span class="status-dot" />
+                  {{ scene.imageUrl ? 'Ready' : scene.generating ? 'Generating…' : 'Pending' }}
+                </div>
+              </div>
+              <div class="scene-image-wrap">
+                <img v-if="scene.imageUrl" :src="scene.imageUrl" class="scene-img" />
+                <div v-else-if="scene.generating" class="scene-img-placeholder generating">
+                  <div class="spinner" /><span>Generating image…</span>
+                </div>
+                <div v-else class="scene-img-placeholder" @click="generateSceneImage(i)">
+                  <Icon name="lucide:image" size="28" /><span>Click to generate</span>
+                </div>
+              </div>
+              <div class="scene-script">
+                <p class="scene-narration">{{ scene.narration }}</p>
+                <div class="scene-meta">
+                  <span class="scene-tag">{{ scene.duration }}s</span>
+                  <span class="scene-tag">{{ scene.mood }}</span>
+                </div>
+                <div class="scene-prompt-label">Image prompt</div>
+                <p class="scene-prompt-text">{{ scene.imagePrompt }}</p>
+              </div>
+            </div>
+          </div>
+          <div v-if="!allImagesReady && videoProject.scenes.length" class="generate-all-wrap">
+            <button class="btn btn-primary btn-full" :disabled="generatingAll" @click="generateAllImages">
+              <Icon name="lucide:sparkles" size="16" />
+              {{ generatingAll ? 'Generating Images…' : 'Generate All Scene Images' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
     </div>
 
     <!-- Toast -->
@@ -594,23 +682,20 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* ── Shell ── */
 .app-shell {
   height: 100dvh;
-  max-width: 480px;
-  margin: 0 auto;
-  position: relative;
-  overflow: hidden;
+  background: var(--bg);
   display: flex;
   flex-direction: column;
-  background: var(--bg);
 }
-.screen { position: absolute; inset: 0; display: flex; flex-direction: column; overflow: hidden; }
 
-/* Onboard */
-.onboard-screen { overflow-y: auto; padding-bottom: 32px; }
+/* ── Onboard ── */
+.screen { display: flex; flex-direction: column; overflow: hidden; flex: 1; }
+.onboard-screen { overflow-y: auto; padding-bottom: 32px; max-width: 500px; width: 100%; margin: 0 auto; }
 .onboard-hero { background: linear-gradient(160deg,#1a1030 0%,var(--bg) 60%); padding: 48px 24px 36px; text-align: center; position: relative; }
 .onboard-hero::after { content:''; position:absolute; bottom:-1px; left:0; right:0; height:32px; background:var(--bg); border-radius:50% 50% 0 0/32px 32px 0 0; }
-.back-link { position:absolute; top:16px; left:16px; color:var(--text2); text-decoration:none; font-size:14px; }
+.back-link { position:absolute; top:16px; left:16px; color:var(--text2); text-decoration:none; font-size:14px; display:flex;align-items:center;gap:6px; }
 .logo-mark { margin-bottom:10px; }
 .onboard-hero h1 { font-size:30px; font-weight:800; }
 .onboard-form { margin:24px 16px 0; background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:24px; }
@@ -618,40 +703,109 @@ onMounted(() => {
 .field { margin-bottom:18px; }
 .field label { display:block; font-size:12px; font-weight:600; color:var(--text2); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px; }
 .hint { text-transform:none; font-weight:400; letter-spacing:0; }
-.field input { width:100%; background:var(--bg3); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text); font-size:15px; padding:12px 14px; outline:none; transition:border-color 0.2s; font-family:var(--font); }
+.field input { width:100%; background:var(--bg3); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text); font-size:15px; padding:12px 14px; outline:none; transition:border-color 0.2s; font-family:var(--font); box-sizing:border-box; }
 .field input:focus { border-color:var(--accent); }
 .photo-upload { width:100%; height:130px; background:var(--bg3); border:2px dashed var(--border); border-radius:var(--radius-sm); display:flex; align-items:center; justify-content:center; cursor:pointer; overflow:hidden; transition:border-color 0.2s; }
 .photo-upload.has-photo, .photo-upload:hover { border-color:var(--accent); }
 .photo-placeholder { display:flex; flex-direction:column; align-items:center; gap:8px; color:var(--text2); font-size:14px; }
-.upload-icon { font-size:30px; }
 .photo-preview { width:100%; height:100%; object-fit:cover; }
 
+/* ── Workspace (chat + preview) ── */
+.workspace {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ── Chat Panel ── */
+.chat-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  min-width: 0;
+}
+
+/* ── Preview Panel ── */
+.preview-panel {
+  display: flex;
+  flex-direction: column;
+  width: 0;
+  overflow: hidden;
+  transition: width 0.3s ease;
+  background: var(--bg);
+}
+
+/* Show preview panel on desktop always */
+@media (min-width: 768px) {
+  .app-shell.has-scenes .preview-panel {
+    width: 52%;
+    flex-shrink: 0;
+  }
+  .app-shell.has-scenes .chat-panel {
+    flex: 0 0 48%;
+    max-width: 520px;
+  }
+  /* Hide mobile-only elements on desktop */
+  .mobile-only { display: none !important; }
+}
+
+@media (max-width: 767px) {
+  .workspace { position: relative; }
+  .chat-panel { position: absolute; inset: 0; background: var(--bg); z-index: 1; }
+  .preview-panel { position: absolute; inset: 0; background: var(--bg); z-index: 2; width: 100%; transform: translateX(100%); transition: transform 0.3s ease; }
+  .preview-panel.mobile-active { transform: translateX(0); }
+  .chat-panel.mobile-hidden { z-index: 0; }
+  /* Hide desktop-only elements on mobile */
+  .desktop-only { display: none !important; }
+}
+
+/* Preview empty state */
+.preview-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 40px 32px;
+  text-align: center;
+  color: var(--text2);
+}
+.preview-empty-icon {
+  width: 72px; height: 72px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  display: flex; align-items: center; justify-content: center;
+}
+.preview-empty p { font-size: 14px; max-width: 280px; line-height: 1.6; }
+.preview-empty strong { color: var(--accent); }
+
 /* Chat header */
-.chat-header { display:flex; align-items:center; gap:12px; padding:12px 16px; background:var(--bg2); border-bottom:1px solid var(--border); flex-shrink:0; z-index:10; }
-.chat-header-info { flex:1; display:flex; align-items:center; gap:10px; }
+.chat-header { display:flex; align-items:center; gap:10px; padding:12px 16px; background:var(--bg2); border-bottom:1px solid var(--border); flex-shrink:0; z-index:10; }
+.chat-header-info { flex:1; display:flex; align-items:center; gap:10px; min-width: 0; }
 .avatar-sm { width:36px; height:36px; background:linear-gradient(135deg,var(--accent),var(--accent2)); border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:16px; flex-shrink:0; }
-.chat-title { font-weight:700; font-size:15px; }
+.chat-title { font-weight:700; font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .chat-sub { font-size:12px; color:var(--text2); }
-.icon-btn { background:var(--bg3); border:1px solid var(--border); color:var(--text); width:36px; height:36px; border-radius:10px; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:18px; flex-shrink:0; transition:all 0.2s; }
+.icon-btn { background:var(--bg3); border:1px solid var(--border); color:var(--text); width:36px; height:36px; border-radius:10px; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0; transition:all 0.2s; text-decoration:none; }
 .icon-btn:hover, .icon-btn.active { border-color:var(--accent); background:rgba(124,92,252,0.1); }
 
-/* Video panel */
+/* Mobile video panel */
 .video-panel { background:var(--bg2); border-bottom:1px solid var(--border); max-height:260px; overflow-y:auto; flex-shrink:0; }
 .video-panel-inner { padding:16px; }
 .empty-panel { display:flex; flex-direction:column; align-items:center; gap:10px; padding:12px; color:var(--text2); font-size:14px; text-align:center; }
-.empty-panel span { font-size:30px; }
 .panel-header { display:flex; align-items:center; justify-content:space-between; font-weight:600; font-size:14px; margin-bottom:12px; }
 .scenes-mini { display:flex; flex-direction:column; gap:8px; }
 .scene-mini-card { display:flex; align-items:center; gap:12px; background:var(--bg3); border:1px solid var(--border); border-radius:10px; padding:10px 12px; cursor:pointer; transition:border-color 0.2s; }
 .scene-mini-card:hover { border-color:var(--accent); }
-.scene-num { width:28px; height:28px; background:var(--accent); border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; flex-shrink:0; }
+.scene-num { width:28px; height:28px; background:var(--accent); border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; flex-shrink:0; color:#fff; }
 .scene-mini-title { font-size:13px; font-weight:600; }
 .scene-mini-status { font-size:11px; color:var(--text2); display:flex; align-items:center; gap:5px; margin-top:2px; }
-.status-dot { width:7px; height:7px; border-radius:50%; display:inline-block; }
-.status-dot.done { background:var(--success); }
-.status-dot.loading { background:var(--warn); animation:pulse 1s infinite; }
-.status-dot.pending { background:var(--border); }
-.mt-sm { margin-top:12px; }
+.status-dot { width:7px; height:7px; border-radius:50%; display:inline-block; background: var(--border); }
+.done .status-dot, .status-dot.done { background:var(--success); }
+.loading .status-dot, .status-dot.loading { background:var(--warn); animation:pulse 1s infinite; }
 
 /* Messages */
 .messages-wrap { flex:1; overflow-y:auto; padding:16px 16px 8px; scroll-behavior:smooth; }
@@ -680,21 +834,24 @@ onMounted(() => {
 .send-btn:hover:not(:disabled) { transform:scale(1.08); }
 .send-btn:disabled { opacity:0.45; cursor:not-allowed; }
 
-/* Preview */
-.preview-screen { background:var(--bg); }
+/* Preview panel content */
 .download-bar { flex-shrink:0; padding:12px 16px; background:var(--bg2); border-bottom:1px solid var(--border); }
 .video-preview-mini { width:100%; border-radius:var(--radius-sm); display:block; max-height:200px; background:#000; }
+.mt-sm { margin-top:12px; }
 .preview-content { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:16px; }
 .scenes-list { display:flex; flex-direction:column; gap:16px; }
+
+/* Scene card */
 .scene-card { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
-.scene-card-header { display:flex; align-items:center; gap:10px; padding:14px 16px 10px; }
-.scene-badge { background:rgba(124,92,252,0.15); color:var(--accent); border-radius:6px; padding:3px 8px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; }
-.scene-card-title { font-weight:600; font-size:14px; }
+.scene-card-header { display:flex; align-items:center; gap:10px; padding:14px 16px 10px; flex-wrap:wrap; }
+.scene-badge { background:rgba(124,92,252,0.15); color:var(--accent); border-radius:6px; padding:3px 8px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; flex-shrink:0; }
+.scene-card-title { font-weight:600; font-size:14px; flex:1; }
+.scene-status-chip { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--text2); flex-shrink:0; }
 .scene-image-wrap { width:100%; aspect-ratio:16/9; background:var(--bg3); overflow:hidden; }
 .scene-img { width:100%; height:100%; object-fit:cover; }
-.scene-img-placeholder { width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--text2); font-size:13px; cursor:pointer; }
+.scene-img-placeholder { width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--text2); font-size:13px; cursor:pointer; transition: background 0.2s; }
+.scene-img-placeholder:not(.generating):hover { background: rgba(124,92,252,0.05); color: var(--accent); }
 .scene-img-placeholder.generating { cursor:default; }
-.scene-img-placeholder span:first-child { font-size:30px; }
 .scene-script { padding:14px 16px; }
 .scene-narration { font-size:14px; line-height:1.6; margin-bottom:10px; }
 .scene-meta { display:flex; gap:6px; margin-bottom:10px; }
