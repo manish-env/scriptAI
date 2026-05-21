@@ -4,23 +4,35 @@ interface Env { DB: D1Database; BUCKET: R2Bucket }
 
 export default defineEventHandler(async (event) => {
   const env = (event.context.cloudflare?.env ?? {}) as Env
-  const { url, type, user_id, session_id } = await readBody(event)
+  const { url, base64, type, user_id, session_id } = await readBody(event)
 
-  if (!url || !type || !user_id) throw createError({ statusCode: 400, message: 'url, type and user_id required' })
+  if ((!url && !base64) || !type || !user_id) {
+    throw createError({ statusCode: 400, message: 'url or base64, type and user_id required' })
+  }
   if (!['photo', 'hero', 'scene_image', 'video'].includes(type)) throw createError({ statusCode: 400, message: 'invalid type' })
 
   if (!env.BUCKET) {
     return { id: uuid(), key: null, assetUrl: url }
   }
 
-  const remote = await fetch(url)
-  if (!remote.ok) throw createError({ statusCode: 502, message: 'could not fetch remote asset' })
+  let contentType = 'image/jpeg'
+  let body: ReadableStream | ArrayBuffer | Uint8Array
 
-  const contentType = remote.headers.get('content-type') || 'image/jpeg'
+  if (base64) {
+    const binary = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
+    body = binary
+    contentType = 'image/jpeg'
+  } else {
+    const remote = await fetch(url!)
+    if (!remote.ok) throw createError({ statusCode: 502, message: 'could not fetch remote asset' })
+    contentType = remote.headers.get('content-type') || 'image/jpeg'
+    body = remote.body as ReadableStream
+  }
+
   const ext = contentType.includes('png') ? 'png' : contentType.includes('webm') ? 'webm' : 'jpg'
   const key = `${type}/${user_id}/${uuid()}.${ext}`
 
-  await env.BUCKET.put(key, remote.body as ReadableStream, { httpMetadata: { contentType } })
+  await env.BUCKET.put(key, body as ReadableStream, { httpMetadata: { contentType } })
 
   const id = uuid()
   if (env.DB) await env.DB.prepare('INSERT INTO assets (id, user_id, session_id, type, r2_key) VALUES (?, ?, ?, ?, ?)').bind(id, user_id, session_id ?? null, type, key).run()

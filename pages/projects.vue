@@ -18,6 +18,8 @@ interface UserProfile {
 const profile = ref<UserProfile | null>(null)
 const projects = ref<ProjectSummary[]>([])
 const loading = ref(true)
+const openMenuId = ref<string | null>(null)
+const toast = ref('')
 
 onMounted(async () => {
   const userId = localStorage.getItem('bm_user_id')
@@ -28,7 +30,7 @@ onMounted(async () => {
     $fetch<ProjectSummary[]>(`/api/sessions?user_id=${userId}`).catch(() => []),
   ])
 
-  if (!user?.name) { navigateTo('/'); return }
+  if (!user?.name) { navigateTo('/app?setup=profile'); return }
 
   profile.value = user
   projects.value = sessions ?? []
@@ -43,6 +45,46 @@ function newProject() {
 function openProject(id: string) {
   localStorage.setItem('bm_active_session', id)
   navigateTo('/app')
+}
+
+function toggleMenu(id: string) {
+  openMenuId.value = openMenuId.value === id ? null : id
+}
+
+async function clearProjectMedia(id: string, title: string | null) {
+  if (!confirm(`Clear all images and video for "${title || 'Untitled'}"? Script and chat will stay.`)) return
+  try {
+    await $fetch(`/api/sessions/${id}/clear-media`, { method: 'POST' })
+    const p = projects.value.find(x => x.id === id)
+    if (p) p.thumbnail_key = null
+    openMenuId.value = null
+    toast.value = 'Media cleared'
+  } catch {
+    toast.value = 'Could not clear media'
+  }
+  setTimeout(() => { toast.value = '' }, 3000)
+}
+
+async function deleteProject(id: string, title: string | null) {
+  if (!confirm(`Delete "${title || 'Untitled'}" permanently?`)) return
+  try {
+    await $fetch(`/api/sessions/${id}`, { method: 'DELETE' })
+    projects.value = projects.value.filter(p => p.id !== id)
+    if (localStorage.getItem('bm_active_session') === id) {
+      localStorage.removeItem('bm_active_session')
+    }
+    openMenuId.value = null
+    toast.value = 'Project deleted'
+  } catch {
+    toast.value = 'Could not delete project'
+  }
+  setTimeout(() => { toast.value = '' }, 3000)
+}
+
+function signOut() {
+  localStorage.removeItem('bm_user_id')
+  localStorage.removeItem('bm_active_session')
+  navigateTo('/')
 }
 
 function thumbUrl(key: string | null) {
@@ -61,9 +103,8 @@ function timeAgo(iso: string) {
 </script>
 
 <template>
-  <div class="projects-page">
+  <div class="projects-page" @click="openMenuId = null">
 
-    <!-- Header -->
     <header class="projects-header">
       <div class="container header-inner">
         <NuxtLink to="/" class="header-logo">
@@ -71,34 +112,36 @@ function timeAgo(iso: string) {
         </NuxtLink>
 
         <div class="header-right">
-          <div v-if="profile" class="user-chip">
-            <div class="user-avatar">{{ profile.name?.[0] ?? '?' }}</div>
-            <span class="user-name">{{ profile.name }}</span>
-          </div>
-          <NuxtLink to="/" class="btn btn-ghost btn-sm">Sign out</NuxtLink>
+          <NuxtLink to="/profile" class="user-chip">
+            <div class="user-avatar">{{ profile?.name?.[0] ?? '?' }}</div>
+            <span class="user-name">{{ profile?.name }}</span>
+          </NuxtLink>
+          <button type="button" class="btn btn-ghost btn-sm" @click="signOut">Sign out</button>
         </div>
       </div>
     </header>
 
     <main class="container projects-main">
 
-      <!-- Top bar -->
       <div class="top-bar">
         <div>
           <h1>My Projects</h1>
           <p class="top-sub">{{ projects.length }} video{{ projects.length !== 1 ? 's' : '' }} created</p>
         </div>
-        <button class="btn btn-primary" @click="newProject">
-          <Icon name="lucide:plus" size="16" /> New Project
-        </button>
+        <div class="top-actions">
+          <NuxtLink to="/profile" class="btn btn-outline btn-sm">
+            <Icon name="lucide:user" size="14" /> Profile
+          </NuxtLink>
+          <button class="btn btn-primary" @click="newProject">
+            <Icon name="lucide:plus" size="16" /> New Project
+          </button>
+        </div>
       </div>
 
-      <!-- Loading -->
       <div v-if="loading" class="empty-state">
         <div class="empty-spinner" />
       </div>
 
-      <!-- Empty state -->
       <div v-else-if="!projects.length" class="empty-state">
         <div class="empty-icon">
           <Icon name="lucide:video" size="40" />
@@ -110,9 +153,7 @@ function timeAgo(iso: string) {
         </button>
       </div>
 
-      <!-- Projects grid -->
       <div v-else class="projects-grid">
-        <!-- New project card -->
         <div class="project-card new-card" @click="newProject">
           <div class="new-card-inner">
             <div class="new-icon"><Icon name="lucide:plus" size="28" /></div>
@@ -120,16 +161,14 @@ function timeAgo(iso: string) {
           </div>
         </div>
 
-        <!-- Existing projects -->
         <div
           v-for="p in projects"
           :key="p.id"
           class="project-card"
           @click="openProject(p.id)"
         >
-          <!-- Thumbnail -->
           <div class="project-thumb">
-            <img v-if="thumbUrl(p.thumbnail_key)" :src="thumbUrl(p.thumbnail_key)!" class="thumb-img" />
+            <img v-if="thumbUrl(p.thumbnail_key)" :src="thumbUrl(p.thumbnail_key)!" class="thumb-img" alt="" />
             <div v-else class="thumb-placeholder">
               <Icon name="lucide:film" size="32" />
             </div>
@@ -138,9 +177,26 @@ function timeAgo(iso: string) {
             </div>
           </div>
 
-          <!-- Info -->
           <div class="project-info">
-            <div class="project-title">{{ p.title || 'Untitled Project' }}</div>
+            <div class="project-info-row">
+              <div class="project-title">{{ p.title || 'Untitled Project' }}</div>
+              <button
+                type="button"
+                class="card-menu-btn"
+                aria-label="Project options"
+                @click.stop="toggleMenu(p.id)"
+              >
+                <Icon name="lucide:more-vertical" size="16" />
+              </button>
+            </div>
+            <div v-if="openMenuId === p.id" class="card-menu" @click.stop>
+              <button type="button" @click="clearProjectMedia(p.id, p.title)">
+                <Icon name="lucide:image-off" size="14" /> Clear images & video
+              </button>
+              <button type="button" class="danger" @click="deleteProject(p.id, p.title)">
+                <Icon name="lucide:trash-2" size="14" /> Delete project
+              </button>
+            </div>
             <div class="project-meta">
               <span class="meta-chip">
                 <Icon name="lucide:layout-list" size="11" />
@@ -155,6 +211,7 @@ function timeAgo(iso: string) {
         </div>
       </div>
 
+      <p v-if="toast" class="page-toast">{{ toast }}</p>
     </main>
   </div>
 </template>
@@ -165,7 +222,6 @@ function timeAgo(iso: string) {
   background: var(--bg);
 }
 
-/* Header */
 .projects-header {
   border-bottom: 1px solid var(--border);
   background: var(--bg2);
@@ -189,7 +245,11 @@ function timeAgo(iso: string) {
   border: 1px solid var(--border);
   border-radius: 20px;
   padding: 4px 12px 4px 4px;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.2s;
 }
+.user-chip:hover { border-color: var(--accent); }
 .user-avatar {
   width: 28px; height: 28px;
   background: linear-gradient(135deg, var(--accent), var(--accent2));
@@ -199,20 +259,19 @@ function timeAgo(iso: string) {
 }
 .user-name { font-size: 14px; font-weight: 600; }
 
-/* Main */
 .projects-main { padding: 40px 24px 80px; }
 
-/* Top bar */
 .top-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 32px;
+  gap: 16px;
 }
 .top-bar h1 { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; }
 .top-sub { color: var(--text2); font-size: 14px; margin-top: 4px; }
+.top-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
-/* Empty state */
 .empty-state {
   display: flex;
   flex-direction: column;
@@ -240,14 +299,12 @@ function timeAgo(iso: string) {
   animation: spin 0.8s linear infinite;
 }
 
-/* Grid */
 .projects-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 20px;
 }
 
-/* Card */
 .project-card {
   background: var(--card);
   border: 1px solid var(--border);
@@ -262,7 +319,6 @@ function timeAgo(iso: string) {
   box-shadow: 0 8px 32px rgba(124, 92, 252, 0.12);
 }
 
-/* New card */
 .new-card {
   border-style: dashed;
   min-height: 200px;
@@ -278,7 +334,6 @@ function timeAgo(iso: string) {
   color: var(--text2);
   font-size: 14px;
   font-weight: 600;
-  transition: color 0.2s;
 }
 .new-icon {
   width: 52px; height: 52px;
@@ -286,12 +341,10 @@ function timeAgo(iso: string) {
   border: 1px solid var(--border);
   border-radius: 14px;
   display: flex; align-items: center; justify-content: center;
-  transition: all 0.2s;
 }
 .new-card:hover .new-card-inner { color: var(--accent); }
 .new-card:hover .new-icon { border-color: var(--accent); background: rgba(124,92,252,0.1); }
 
-/* Thumbnail */
 .project-thumb {
   width: 100%;
   aspect-ratio: 16/9;
@@ -317,16 +370,68 @@ function timeAgo(iso: string) {
 }
 .project-card:hover .thumb-overlay { opacity: 1; }
 
-/* Info */
-.project-info { padding: 14px 16px; }
+.project-info { padding: 14px 16px; position: relative; }
+.project-info-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
 .project-title {
   font-size: 14px;
   font-weight: 700;
-  margin-bottom: 8px;
+  flex: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.card-menu-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.card-menu-btn:hover { background: var(--bg3); color: var(--text); }
+.card-menu {
+  position: absolute;
+  right: 12px;
+  bottom: 52px;
+  min-width: 180px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px;
+  z-index: 20;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+}
+.card-menu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+.card-menu button:hover { background: var(--bg3); }
+.card-menu button.danger { color: var(--error); }
+.card-menu button.danger:hover { background: rgba(239, 68, 68, 0.1); }
+
 .project-meta {
   display: flex;
   align-items: center;
@@ -340,10 +445,25 @@ function timeAgo(iso: string) {
   color: var(--text2);
 }
 
+.page-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg2);
+  border: 1px solid var(--success);
+  color: var(--success);
+  padding: 10px 20px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  z-index: 200;
+}
+
 @keyframes spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 640px) {
-  .top-bar { flex-direction: column; align-items: flex-start; gap: 16px; }
+  .top-bar { flex-direction: column; align-items: flex-start; }
   .projects-grid { grid-template-columns: 1fr 1fr; }
   .header-right .user-name { display: none; }
 }

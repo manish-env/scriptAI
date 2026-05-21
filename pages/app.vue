@@ -1,6 +1,10 @@
 <script setup lang="ts">
 useHead({ title: 'BrandMe AI — Create Your Video' })
 
+const route = useRoute()
+const isProfileSetup = computed(() => route.query.setup === 'profile')
+const showProjectMenu = ref(false)
+
 // ── Types ──────────────────────────────────────────────────────────────────
 interface Scene {
   id?: string
@@ -143,9 +147,14 @@ function onDurationResizeEnd() {
   document.body.style.userSelect = ''
 }
 
+function closeProjectMenu() {
+  showProjectMenu.value = false
+}
+
 onUnmounted(() => {
   onDurationResizeEnd()
   if (persistScenesTimer) clearTimeout(persistScenesTimer)
+  document.removeEventListener('click', closeProjectMenu)
 })
 
 // ── API helpers ────────────────────────────────────────────────────────────
@@ -277,7 +286,42 @@ function onPhotoSelected(e: Event) {
   reader.readAsDataURL(file)
 }
 
+async function saveProfileSetup() {
+  if (!canStart.value) return
+  if (!userId.value) {
+    userId.value = crypto.randomUUID()
+    localStorage.setItem('bm_user_id', userId.value)
+  }
+  let photo_key: string | null = null
+  if (profile.photoBase64) {
+    const res = await $fetch<{ key: string | null }>('/api/upload', {
+      method: 'POST',
+      body: { base64: profile.photoBase64, type: 'photo', user_id: userId.value },
+    })
+    photo_key = res.key
+    if (photo_key) profile.photoUrl = `/api/assets/${photo_key}`
+  }
+  await $fetch('/api/user', {
+    method: 'POST',
+    body: {
+      id: userId.value,
+      name: profile.name.trim(),
+      niche: profile.niche.trim(),
+      photo_key,
+      hero_key: null,
+    },
+  })
+  profile.heroUrl = null
+  profile.heroBase64 = null
+  showToastMsg('Profile updated')
+  navigateTo('/profile')
+}
+
 async function startChat() {
+  if (isProfileSetup.value) {
+    await saveProfileSetup()
+    return
+  }
   if (!userId.value) {
     userId.value = crypto.randomUUID()
     localStorage.setItem('bm_user_id', userId.value)
@@ -959,6 +1003,36 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 }
 
 // ── Session Management ─────────────────────────────────────────────────────
+async function clearProjectMedia() {
+  if (!sessionId.value) return
+  if (!confirm('Clear all scene images and rendered video? Your script and chat history will stay.')) return
+  try {
+    await $fetch(`/api/sessions/${sessionId.value}/clear-media`, { method: 'POST' })
+    videoUrl.value = null
+    for (const s of videoProject.scenes) {
+      s.imageUrl = null
+      s.frameUrls = []
+    }
+    showProjectMenu.value = false
+    showToastMsg('Images and video cleared')
+  } catch {
+    showToastMsg('Could not clear media', 'error')
+  }
+}
+
+async function deleteProject() {
+  if (!sessionId.value) return
+  if (!confirm('Delete this project permanently? This cannot be undone.')) return
+  try {
+    await $fetch(`/api/sessions/${sessionId.value}`, { method: 'DELETE' })
+    localStorage.removeItem('bm_active_session')
+    showProjectMenu.value = false
+    navigateTo('/projects')
+  } catch {
+    showToastMsg('Could not delete project', 'error')
+  }
+}
+
 function clearSession() {
   if (!confirm('Start a new video? This will clear the current chat and script.')) return
   localStorage.removeItem('bm_active_session')
@@ -1006,6 +1080,7 @@ function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
 
 // ── Init ───────────────────────────────────────────────────────────────────
 onMounted(async () => {
+  document.addEventListener('click', closeProjectMenu)
   const uid = localStorage.getItem('bm_user_id')
   const activeSession = localStorage.getItem('bm_active_session')
 
@@ -1026,6 +1101,11 @@ onMounted(async () => {
       profile.heroUrl = `/api/assets/${user.hero_key}`
       try { profile.heroBase64 = await assetUrlToBase64(profile.heroUrl) } catch { /* lazy load */ }
     }
+  }
+
+  if (isProfileSetup.value) {
+    screen.value = 'onboard'
+    return
   }
 
   // Load existing session if one was set from projects page
@@ -1055,12 +1135,14 @@ onMounted(async () => {
     <!-- ── ONBOARD ── -->
     <div v-if="screen === 'onboard'" class="screen onboard-screen">
       <div class="onboard-hero">
-        <NuxtLink to="/" class="back-link"><Icon name="lucide:arrow-left" size="14" /> Back</NuxtLink>
+        <NuxtLink :to="isProfileSetup ? '/profile' : '/'" class="back-link">
+          <Icon name="lucide:arrow-left" size="14" /> {{ isProfileSetup ? 'Profile' : 'Back' }}
+        </NuxtLink>
         <BrandLogo :size="52" :wordmark="false" class="logo-mark" />
         <h1>BrandMe <span class="gradient-text">AI</span></h1>
       </div>
       <div class="onboard-form card">
-        <h2>Let's start with you</h2>
+        <h2>{{ isProfileSetup ? 'Update your profile' : "Let's start with you" }}</h2>
         <div class="field">
           <label>Your Name</label>
           <input v-model="profile.name" type="text" placeholder="e.g. Sarah Johnson" />
@@ -1081,7 +1163,8 @@ onMounted(async () => {
           <input v-model="profile.niche" type="text" placeholder="e.g. Digital Marketing, Fitness, Finance" />
         </div>
         <button class="btn btn-primary btn-full" :disabled="!canStart" @click="startChat">
-          <Icon name="lucide:sparkles" size="16" /> Start Creating
+          <Icon :name="isProfileSetup ? 'lucide:save' : 'lucide:sparkles'" size="16" />
+          {{ isProfileSetup ? 'Save profile' : 'Start Creating' }}
         </button>
       </div>
     </div>
@@ -1101,6 +1184,20 @@ onMounted(async () => {
             </div>
           </div>
           <button class="icon-btn" title="New video" @click="clearSession"><Icon name="lucide:plus" size="18" /></button>
+          <div v-if="sessionId" class="project-menu-wrap">
+            <button class="icon-btn" title="Project options" @click.stop="showProjectMenu = !showProjectMenu">
+              <Icon name="lucide:more-vertical" size="18" />
+            </button>
+            <div v-if="showProjectMenu" class="project-menu" @click.stop>
+              <button type="button" @click="clearProjectMedia">
+                <Icon name="lucide:image-off" size="16" /> Clear images & video
+              </button>
+              <button type="button" class="danger" @click="deleteProject">
+                <Icon name="lucide:trash-2" size="16" /> Delete project
+              </button>
+            </div>
+          </div>
+          <NuxtLink to="/profile" class="icon-btn desktop-only" title="Profile"><Icon name="lucide:user" size="18" /></NuxtLink>
           <button class="icon-btn mobile-only" :class="{ active: showVideoPanel }" @click="showVideoPanel = !showVideoPanel">
             <Icon name="lucide:video" size="18" />
           </button>
@@ -1455,6 +1552,38 @@ onMounted(async () => {
 .chat-sub { font-size:12px; color:var(--text2); }
 .icon-btn { background:var(--bg3); border:1px solid var(--border); color:var(--text); width:36px; height:36px; border-radius:10px; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0; transition:all 0.2s; text-decoration:none; }
 .icon-btn:hover, .icon-btn.active { border-color:var(--accent); background:rgba(124,92,252,0.1); }
+.project-menu-wrap { position: relative; }
+.project-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 200px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px;
+  z-index: 100;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+.project-menu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+.project-menu button:hover { background: var(--bg3); }
+.project-menu button.danger { color: var(--error); }
+.project-menu button.danger:hover { background: rgba(239, 68, 68, 0.1); }
 
 /* Mobile video panel */
 .video-panel { background:var(--bg2); border-bottom:1px solid var(--border); max-height:260px; overflow-y:auto; flex-shrink:0; }
