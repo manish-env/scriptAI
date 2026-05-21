@@ -22,7 +22,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'messages array is required' })
   }
 
-  const model = ALLOWED_MODELS.has(body.model ?? '') ? body.model : 'claude-opus-4-7'
+  const model = ALLOWED_MODELS.has(body.model ?? '') ? body.model : 'claude-sonnet-4-6'
   const max_tokens = Math.min(body.max_tokens ?? 1500, MAX_TOKENS_CAP)
 
   const payload: Record<string, unknown> = {

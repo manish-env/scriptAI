@@ -597,7 +597,7 @@ NEVER output raw JSON, code blocks, or script schemas. Be concise, expert, and a
   const data = await $fetch<{ content: { text: string }[] }>('/api/chat', {
     method: 'POST',
     body: {
-      model: 'claude-opus-4-7',
+      model: 'claude-sonnet-4-6',
       max_tokens: opts?.max_tokens ?? 1500,
       system,
       messages: msgs,
