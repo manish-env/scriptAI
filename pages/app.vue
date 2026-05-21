@@ -359,7 +359,10 @@ function parseFrameKeys(raw: string | null | undefined): string[] {
 }
 
 async function persistSceneFrames(scene: Scene) {
-  if (!scene.id || !sessionId.value || !scene.frameUrls.length) return
+  if (!sessionId.value || !scene.frameUrls.length) return
+  // Wait up to 3s for scene.id to be populated (sync may still be in-flight)
+  for (let i = 0; i < 15 && !scene.id; i++) await sleep(200)
+  if (!scene.id) { console.warn('persistSceneFrames: scene has no id, skipping'); return }
   const keys = scene.frameUrls.map(u => u.replace(/^\/api\/assets\//, ''))
   await dbPatch(`/api/sessions/${sessionId.value}/scenes`, {
     scene_id: scene.id,
@@ -557,7 +560,9 @@ async function applyVideoScript(scriptJson: VideoScriptJson) {
   const summary = `🎬 **Video script created!** "${scriptJson.title}"\n\n**${scriptJson.scenes.length} scenes** (each in its own setting):\n${scriptJson.scenes.map((s: Scene, i: number) => `${i + 1}. **${s.title}** — ${s.narration.slice(0, 60)}…`).join('\n')}\n\nOpen the storyboard and **Generate** — each scene gets **${FRAMES_PER_SCENE} flipbook pages** (same location, character moves as you flip). Ready?`
   messages.value.push({ role: 'assistant', content: summary, suggestCreate: false })
   scrollToBottom()
-  syncScenes(videoProject.scenes.map(s => ({
+  // Await so that scene IDs are written back before the user can click Generate.
+  // persistSceneFrames needs scene.id to save image keys to D1.
+  await syncScenes(videoProject.scenes.map(s => ({
     title: s.title,
     narration: s.narration,
     imagePrompt: s.framePrompts?.length
@@ -1326,6 +1331,28 @@ async function clearProjectMedia() {
   }
 }
 
+async function restoreImages() {
+  if (!sessionId.value) return
+  const data = await $fetch<{ scenes: { id: string; frame_keys: string | null; image_key: string | null }[] }>(
+    `/api/sessions/${sessionId.value}`
+  ).catch(() => null)
+  if (!data?.scenes?.length) { showToastMsg('Nothing saved to restore', 'error'); return }
+  let restored = 0
+  data.scenes.forEach((dbScene, i) => {
+    const scene = videoProject.scenes[i]
+    if (!scene) return
+    scene.id = dbScene.id
+    if (dbScene.frame_keys) {
+      const urls = parseFrameKeys(dbScene.frame_keys)
+      if (urls.length) { scene.frameUrls = urls; scene.imageUrl = urls[0]; restored++ }
+    } else if (dbScene.image_key) {
+      const url = `/api/assets/${dbScene.image_key}`
+      scene.frameUrls = [url]; scene.imageUrl = url; restored++
+    }
+  })
+  showToastMsg(restored ? `Restored ${restored} scene(s) from saved data` : 'No saved images found', restored ? 'success' : 'error')
+}
+
 function apiErrorMessage(e: unknown) {
   const err = e as { data?: { message?: string }; statusMessage?: string; message?: string }
   return err.data?.message || err.statusMessage || err.message || 'Request failed'
@@ -1600,6 +1627,14 @@ onMounted(async () => {
             </div>
           </div>
           <div class="toolbar-actions">
+            <button
+              v-if="sessionId && videoProject.scenes.length && !allImagesReady"
+              class="btn btn-sm btn-ghost"
+              title="Reload saved images from cloud without regenerating"
+              @click="restoreImages"
+            >
+              <Icon name="lucide:refresh-cw" size="14" /> Restore saved
+            </button>
             <button
               v-if="!allImagesReady && videoProject.scenes.length"
               class="btn btn-sm btn-outline"
