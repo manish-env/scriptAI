@@ -358,14 +358,18 @@ function parseFrameKeys(raw: string | null | undefined): string[] {
   }
 }
 
-async function persistSceneFrames(scene: Scene) {
-  if (!sessionId.value || !scene.frameUrls.length) return
-  // Wait up to 3s for scene.id to be populated (sync may still be in-flight)
-  for (let i = 0; i < 15 && !scene.id; i++) await sleep(200)
-  if (!scene.id) { console.warn('persistSceneFrames: scene has no id, skipping'); return }
-  const keys = scene.frameUrls.map(u => u.replace(/^\/api\/assets\//, ''))
+async function persistSceneFrames(sceneIndex: number) {
+  if (!sessionId.value) return
+  const scene = videoProject.scenes[sceneIndex]
+  if (!scene?.frameUrls.length) return
+  // Only persist R2 URLs — Replicate URLs expire and are useless on reload
+  const keys = scene.frameUrls
+    .filter(u => u.startsWith('/api/assets/'))
+    .map(u => u.replace(/^\/api\/assets\//, ''))
+  if (!keys.length) return
+  // Use position (index) not scene.id — position is always stable, no race condition
   await dbPatch(`/api/sessions/${sessionId.value}/scenes`, {
-    scene_id: scene.id,
+    position: sceneIndex,
     image_key: keys[0],
     frame_keys: JSON.stringify(keys),
   })
@@ -759,8 +763,9 @@ async function generateSceneFrames(index: number) {
       scene.frameUrls.push(assetUrl)
       scene.imageUrl = scene.frameUrls[0]
       if (fi === 0) scenePageRef = await assetUrlToBase64(assetUrl)
+      // Persist after every frame so a partial set survives if generation fails mid-way
+      await persistSceneFrames(index)
     }
-    await persistSceneFrames(scene)
     showToastMsg(`Scene ${index + 1}: ${FRAMES_PER_SCENE} frames ready`)
   } catch (e: unknown) {
     showToastMsg(`Scene ${index + 1}: ${(e as Error).message}`, 'error')
@@ -1333,24 +1338,32 @@ async function clearProjectMedia() {
 
 async function restoreImages() {
   if (!sessionId.value) return
-  const data = await $fetch<{ scenes: { id: string; frame_keys: string | null; image_key: string | null }[] }>(
-    `/api/sessions/${sessionId.value}`
-  ).catch(() => null)
-  if (!data?.scenes?.length) { showToastMsg('Nothing saved to restore', 'error'); return }
-  let restored = 0
-  data.scenes.forEach((dbScene, i) => {
-    const scene = videoProject.scenes[i]
-    if (!scene) return
-    scene.id = dbScene.id
-    if (dbScene.frame_keys) {
+  showToastMsg('Restoring saved images…')
+  try {
+    const data = await $fetch<{ scenes: { id: string; position: number; frame_keys: string | null; image_key: string | null }[] }>(
+      `/api/sessions/${sessionId.value}`,
+    )
+    let restored = 0
+    ;(data.scenes ?? []).forEach((dbScene) => {
+      const scene = videoProject.scenes[dbScene.position]
+      if (!scene) return
+      if (dbScene.id) scene.id = dbScene.id
       const urls = parseFrameKeys(dbScene.frame_keys)
-      if (urls.length) { scene.frameUrls = urls; scene.imageUrl = urls[0]; restored++ }
-    } else if (dbScene.image_key) {
-      const url = `/api/assets/${dbScene.image_key}`
-      scene.frameUrls = [url]; scene.imageUrl = url; restored++
-    }
-  })
-  showToastMsg(restored ? `Restored ${restored} scene(s) from saved data` : 'No saved images found', restored ? 'success' : 'error')
+      if (urls.length) {
+        scene.frameUrls = urls
+        scene.imageUrl = urls[0]
+        restored++
+      } else if (dbScene.image_key) {
+        const url = `/api/assets/${dbScene.image_key}`
+        scene.frameUrls = [url]
+        scene.imageUrl = url
+        restored++
+      }
+    })
+    showToastMsg(restored ? `Restored ${restored} scene(s)` : 'No saved images found — generate first', restored ? 'success' : 'error')
+  } catch {
+    showToastMsg('Could not reach server', 'error')
+  }
 }
 
 function apiErrorMessage(e: unknown) {

@@ -43,16 +43,12 @@ export default defineEventHandler(async (event) => {
   }
 
   if (event.method === 'PATCH') {
-    const { scene_id, image_key, frame_keys } = await readBody(event)
-    if (!scene_id) throw createError({ statusCode: 400, message: 'scene_id required' })
-    if (env.DB) {
-      if (frame_keys !== undefined) {
-        await env.DB.prepare(
-          'UPDATE scenes SET image_key = COALESCE(?, image_key), frame_keys = ? WHERE id = ? AND session_id = ?',
-        ).bind(image_key ?? null, frame_keys, scene_id, session_id).run()
-      } else if (image_key) {
-        await env.DB.prepare('UPDATE scenes SET image_key = ? WHERE id = ? AND session_id = ?').bind(image_key, scene_id, session_id).run()
-      }
+    const { position, image_key, frame_keys } = await readBody(event)
+    if (position === undefined || position === null) throw createError({ statusCode: 400, message: 'position required' })
+    if (env.DB && frame_keys !== undefined) {
+      await env.DB.prepare(
+        'UPDATE scenes SET image_key = ?, frame_keys = ? WHERE session_id = ? AND position = ?',
+      ).bind(image_key ?? null, frame_keys, session_id, position).run()
     }
     return { ok: true }
   }
