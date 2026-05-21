@@ -1,9 +1,9 @@
-interface Env { ANTHROPIC_API_KEY: string }
+interface Env { NUXT_ANTHROPIC_API_KEY: string }
 
 export default defineEventHandler(async (event) => {
   const config = useRuntimeConfig()
   const env = (event.context.cloudflare?.env ?? {}) as Env
-  const apiKey = config.anthropicApiKey || env.ANTHROPIC_API_KEY
+  const apiKey = config.anthropicApiKey || env.NUXT_ANTHROPIC_API_KEY
 
   if (!apiKey) throw createError({ statusCode: 500, message: 'ANTHROPIC_API_KEY not configured' })
 
