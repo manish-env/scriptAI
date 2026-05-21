@@ -1,2 +1,6 @@
-.dev.vars
 node_modules/
+.output/
+.nuxt/
+.dev.vars
+dist/
+keys.txt

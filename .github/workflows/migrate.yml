@@ -4,28 +4,20 @@ on:
   push:
     branches: [main]
     paths:
-      - schema.sql          # only runs when schema changes
-  workflow_dispatch:        # also triggerable manually from GitHub UI
+      - schema.sql
+  workflow_dispatch:
 
 jobs:
   migrate:
     name: Apply D1 schema
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
-
       - name: Run migration
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          npx wrangler@latest d1 execute brandme-db \
-            --file=schema.sql \
-            --remote
+        run: npx wrangler@latest d1 execute brandme-db --file=schema.sql --remote

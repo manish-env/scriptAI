@@ -1,12 +1,12 @@
 name = "brandme-ai"
 compatibility_date = "2024-01-01"
-pages_build_output_dir = "."
+pages_build_output_dir = "dist"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "brandme-db"
-database_id = "REPLACE_WITH_D1_ID"   # wrangler d1 create brandme-db
+database_id = "REPLACE_WITH_D1_ID"
 
 [[r2_buckets]]
 binding = "ASSETS"
-bucket_name = "brandme-assets"        # wrangler r2 bucket create brandme-assets
+bucket_name = "brandme-assets"
