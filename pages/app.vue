@@ -495,7 +495,7 @@ Your job is to:
 1. Chat naturally; understand message, audience, and story
 2. Outline scenes with distinct locations per scene
 3. When ready, suggest "create video" or Create My Video
-4. Same character face/outfit everywhere; different environment per scene
+4. Same character face/outfit everywhere (editorial vector caricature style); different environment per scene
 
 NEVER output raw JSON, code blocks, or script schemas in chat. The app builds the formal script separately when they create the video.
 
@@ -571,7 +571,7 @@ IMPORTANT: Respond ONLY with valid JSON (no markdown). Schema:
 {
   "title": "Video title",
   "topic": "One sentence topic",
-  "characterDescription": "Fixed look for ${profile.name || 'the creator'}: face, hair, skin, outfit, caricature style — never change",
+  "characterDescription": "Fixed look for ${profile.name || 'the creator'}: face shape, hair, skin tone, outfit — editorial vector caricature (refined, not childish cartoon) — never change",
   "scenes": [
     {
       "title": "Scene title",
@@ -590,7 +590,8 @@ Rules:
 - Every scene MUST have a clearly different imagePrompt location than every other scene in this video.
 - framePrompts: exactly ${FRAMES_PER_SCENE} strings — character pose/expression only for that scene's story (no background words).
 - imagePrompt = environment for all ${FRAMES_PER_SCENE} pages in that scene; never reuse the same room across scenes unless the story requires it.
-- One person only (the creator).`
+- One person only (the creator).
+- Visual style: editorial vector caricature / refined magazine illustration — never childish cartoon or chibi.`
 
   const msgs = [
     ...buildChatMessagesForScript(),
@@ -653,45 +654,31 @@ function onSceneVisualPromptInput(index: number) {
   }, 900)
 }
 
-function buildFramePrompt(scene: Scene, poseIndex: number) {
-  const char = profile.characterDescription
+function characterDescriptionForPrompt() {
+  return profile.characterDescription
     || videoProject.characterDescription
-    || `caricature of ${profile.name}, ${profile.niche} creator`
-  const poseHint = scene.framePrompts?.[poseIndex]?.trim()
-  if (!poseHint) throw new Error('Frame prompts missing for this scene')
-
-  if (poseIndex === 0) {
-    return [
-      char,
-      'Same person as reference portrait — identical face, hair, skin tone, and outfit.',
-      scene.imagePrompt,
-      'Flipbook page 1: full illustration of this exact environment and background for this scene.',
-      `Character pose: ${poseHint}.`,
-      'Storybook illustration on paper, warm colors, 16:9, no plain studio backdrop unless the scene is a studio.',
-    ].join(' ')
-  }
-  return [
-    char,
-    'Flipbook next page: keep the EXACT same background, room, props, lighting, and camera as the reference image.',
-    'Change ONLY the character pose and expression — environment must not change.',
-    `New pose: ${poseHint}.`,
-    'Same illustration style, same scene location.',
-  ].join(' ')
+    || `${profile.name}, ${profile.niche} professional, editorial vector caricature style`
 }
 
-// ── Image Generation (hero + 3 flipbook pages per scene) ────────────────────
+function requirePhotoBase64() {
+  if (!profile.photoBase64) {
+    throw new Error('Upload a clear face photo in Profile — we use it to keep the same character in every scene')
+  }
+  return profile.photoBase64
+}
+
+// ── Image Generation (Flux Kontext + Consistent Character) ───────────────────
 
 async function ensureHeroCaricature() {
   if (profile.heroBase64) return
   if (!profile.photoBase64 && !profile.photoUrl) return
 
-  showToastMsg('Creating your character…')
-  const prompt = [
-    `Professional caricature portrait of ${profile.name}, ${profile.niche} expert,`,
-    'warm friendly cartoon, front-facing, neutral smile, clean soft background,',
-    'paper-cut illustration style, consistent character design, 16:9, high quality',
-  ].join(' ')
-  const replicateUrl = await callReplicate(prompt, { usePhoto: true, strength: 0.55 })
+  showToastMsg('Creating your character look…')
+  const replicateUrl = await runKontextEdit(
+    buildHeroPrompt(profile.name, profile.niche, characterDescriptionForPrompt()),
+    requirePhotoBase64(),
+    'image/jpeg',
+  )
   const { assetUrl, key } = await uploadAsset(replicateUrl, 'hero')
   profile.heroUrl = assetUrl
   profile.heroBase64 = await assetUrlToBase64(assetUrl)
@@ -712,7 +699,7 @@ async function generateAllImages() {
     for (const [i, scene] of videoProject.scenes.entries()) {
       if (scene.frameUrls.length < FRAMES_PER_SCENE) await generateSceneFrames(i)
     }
-    showToastMsg('All scene animations ready!')
+    showToastMsg('All scene pages ready!')
   } catch (e: unknown) {
     showToastMsg((e as Error).message || 'Generation failed', 'error')
   } finally {
@@ -728,20 +715,32 @@ async function generateSceneFrames(index: number) {
   scene.imageUrl = null
   try {
     await ensureHeroCaricature()
-    if (!profile.heroBase64 && !profile.photoBase64) {
-      throw new Error('Upload a photo first so we can lock your character look')
-    }
+    const photoB64 = requirePhotoBase64()
     scene.generatingLabel = 'Planning poses…'
     await ensureSceneFramePrompts(scene)
     let scenePageRef: string | null = null
+    const charDesc = characterDescriptionForPrompt()
     for (let fi = 0; fi < FRAMES_PER_SCENE; fi++) {
-      scene.generatingLabel = fi === 0 ? `Page 1/${FRAMES_PER_SCENE} (scene)` : `Page ${fi + 1}/${FRAMES_PER_SCENE} (pose)`
-      const replicateUrl = await callReplicate(
-        buildFramePrompt(scene, fi),
-        fi === 0
-          ? { strength: 0.4 }
-          : { referenceBase64: scenePageRef!, strength: 0.26 },
-      )
+      const pose = scene.framePrompts?.[fi]?.trim()
+      if (!pose) throw new Error('Frame prompts missing for this scene')
+      scene.generatingLabel = fi === 0 ? `Page 1/${FRAMES_PER_SCENE} (new scene)` : `Page ${fi + 1}/${FRAMES_PER_SCENE} (pose)`
+      let replicateUrl: string
+      if (fi === 0) {
+        try {
+          replicateUrl = await runConsistentCharacterScene(
+            buildSceneEstablishPromptCharacterModel(scene.imagePrompt, charDesc, pose, scene.mood),
+            photoB64,
+          )
+        } catch {
+          replicateUrl = await runKontextEdit(
+            buildSceneEstablishPromptKontext(scene.imagePrompt, charDesc, pose, scene.mood),
+            photoB64,
+            'image/jpeg',
+          )
+        }
+      } else {
+        replicateUrl = await runKontextEdit(buildPoseEditPrompt(pose), scenePageRef!)
+      }
       const { assetUrl } = await uploadAsset(replicateUrl, 'scene_image')
       scene.frameUrls.push(assetUrl)
       scene.imageUrl = scene.frameUrls[0]
@@ -762,50 +761,63 @@ async function generateSceneImage(index: number) {
   return generateSceneFrames(index)
 }
 
-async function callReplicate(prompt: string, opts?: { usePhoto?: boolean; referenceBase64?: string; strength?: number }) {
-  const fullPrompt = `${prompt}, caricature illustration style, digital art, vibrant colors, warm professional personal brand, high quality`
-  const input: Record<string, unknown> = {
-    prompt: fullPrompt,
-    negative_prompt: 'realistic photo, photography, blurry, low quality, different face, different person, plain white background, generic studio backdrop, nsfw',
-    width: 1280,
-    height: 720,
-    num_outputs: 1,
-    scheduler: 'K_EULER',
-    num_inference_steps: 30,
-    guidance_scale: 7.5,
-  }
-  const ref = opts?.referenceBase64
-    ?? (opts?.usePhoto ? profile.photoBase64 : (profile.heroBase64 || profile.photoBase64))
-  const strength = opts?.strength ?? (opts?.referenceBase64 ? 0.26 : (profile.heroBase64 ? 0.38 : 0.5))
-  if (ref) {
-    input.image = `data:image/jpeg;base64,${ref}`
-    input.strength = strength
-  }
-
-  const res = await $fetch<{ id: string }>('/api/image', {
-    method: 'POST',
-    body: { version: '39ed52f2a78e934b3ba6e2a89f5b1c712de7dfea535525255b1aa35c5565e08b', input },
-  })
-  return pollReplicate(res.id)
+async function startImagePrediction(body: { model: string; input: Record<string, unknown> }) {
+  const res = await $fetch<{ id: string }>('/api/image', { method: 'POST', body })
+  return res.id
 }
 
 async function pollReplicatePrediction(
   id: string,
   pollPath: string,
   failLabel: string,
-  max = 60,
+  max = 90,
 ) {
   for (let i = 0; i < max; i++) {
     await sleep(2000)
     const data = await $fetch<{ status: string; output: string | string[]; error?: string }>(pollPath)
-    if (data.status === 'succeeded') return Array.isArray(data.output) ? data.output[0] : data.output
+    if (data.status === 'succeeded') return pickPollOutput(data.output)
     if (data.status === 'failed') throw new Error(data.error || failLabel)
   }
   throw new Error(`${failLabel} (timed out)`)
 }
 
-async function pollReplicate(id: string, max = 60) {
+async function pollReplicate(id: string, max = 90) {
   return pollReplicatePrediction(id, `/api/image/${id}`, 'Image generation failed', max)
+}
+
+async function runKontextEdit(
+  prompt: string,
+  imageBase64: string,
+  mime: 'image/jpeg' | 'image/png' = 'image/png',
+) {
+  const id = await startImagePrediction({
+    model: REPLICATE_MODELS.kontext,
+    input: {
+      prompt,
+      input_image: imageDataUri(imageBase64, mime),
+      aspect_ratio: '16:9',
+      output_format: 'png',
+      safety_tolerance: 2,
+    },
+  })
+  return pollReplicate(id)
+}
+
+async function runConsistentCharacterScene(prompt: string, subjectBase64: string) {
+  const id = await startImagePrediction({
+    model: REPLICATE_MODELS.character,
+    input: {
+      subject: imageDataUri(subjectBase64, 'image/jpeg'),
+      prompt,
+      negative_prompt: ILLUSTRATION_NEGATIVE,
+      number_of_outputs: 1,
+      number_of_images_per_pose: 1,
+      randomise_poses: false,
+      output_format: 'png',
+      output_quality: 95,
+    },
+  })
+  return pollReplicate(id)
 }
 
 // ── Narration (TTS via Replicate) ───────────────────────────────────────────

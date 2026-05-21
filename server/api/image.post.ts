@@ -1,30 +1,15 @@
-import { createError } from 'h3'
-import { getReplicateApiKey } from '../utils/secrets'
+import { createReplicatePrediction } from '../utils/replicateImage'
 
 export default defineEventHandler(async (event) => {
-  const apiKey = getReplicateApiKey(event)
-  const body = await readBody(event)
+  const body = await readBody<{
+    version?: string
+    model?: string
+    input: Record<string, unknown>
+  }>(event)
 
-  try {
-    return await $fetch<unknown>('https://api.replicate.com/v1/predictions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body,
-    })
-  } catch (e: unknown) {
-    const err = e as { statusCode?: number; data?: { detail?: string } }
-    if (err.statusCode === 401) {
-      throw createError({
-        statusCode: 401,
-        message: 'Replicate rejected the API key. Check REPLICATE_API_KEY is valid (starts with r8_).',
-      })
-    }
-    throw createError({
-      statusCode: err.statusCode || 502,
-      message: err.data?.detail || 'Replicate image request failed',
-    })
+  if (!body?.input || (!body.version && !body.model)) {
+    throw createError({ statusCode: 400, message: 'Provide model or version plus input' })
   }
+
+  return createReplicatePrediction(event, body)
 })
