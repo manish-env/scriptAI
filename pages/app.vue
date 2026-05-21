@@ -184,6 +184,51 @@ const userId = ref<string | null>(null)
 const sessionId = ref<string | null>(null)
 const toast = reactive({ show: false, message: '', type: 'success' })
 
+const projectSetup = reactive({ videoType: '', projectTitle: '', projectPurpose: '' })
+
+const VIDEO_TYPE_CONFIG: Record<string, { label: string; persona: string; firstQuestion: string }> = {
+  'personal-brand': {
+    label: 'Personal Brand Story',
+    persona: 'personal branding strategist who has helped thousands of professionals build online authority through compelling video stories',
+    firstQuestion: '**Who is your ideal audience** and what\'s the one transformation or result you help them achieve?',
+  },
+  'educational': {
+    label: 'Educational Tutorial',
+    persona: 'expert educational content creator specializing in online courses, tutorials, and explainer videos that make complex topics simple',
+    firstQuestion: '**What\'s the exact skill or concept** you\'re teaching, and what\'s the most common mistake your learners make before they understand it?',
+  },
+  'motivational': {
+    label: 'Motivational / Inspirational',
+    persona: 'top motivational content creator known for viral inspirational videos that drive people to take immediate action',
+    firstQuestion: '**What\'s the pivotal struggle or turning point** in your story that will resonate most deeply with your audience?',
+  },
+  'product-demo': {
+    label: 'Product Demo',
+    persona: 'product marketing expert specializing in compelling demo and showcase videos that convert viewers into customers',
+    firstQuestion: '**What\'s the #1 problem** your product solves, and who is the specific person it\'s designed for?',
+  },
+  'how-to': {
+    label: 'How-To Guide',
+    persona: 'expert how-to content creator known for clear, actionable step-by-step videos with high completion rates',
+    firstQuestion: '**What\'s the exact outcome** someone achieves after following your guide — be as specific as possible.',
+  },
+  'case-study': {
+    label: 'Case Study / Success Story',
+    persona: 'business storyteller specializing in case study and success story videos that build trust and credibility',
+    firstQuestion: '**What\'s the before/after transformation?** Where did your client/subject start, and exactly where did they end up?',
+  },
+  'thought-leadership': {
+    label: 'Thought Leadership',
+    persona: 'thought leadership content strategist who helps executives and industry experts share insights that establish authority',
+    firstQuestion: '**What\'s your contrarian take or the one thing** most people in your industry get completely wrong?',
+  },
+  'course-teaser': {
+    label: 'Course / Program Teaser',
+    persona: 'online course marketing expert specializing in compelling course preview videos that drive enrollments',
+    firstQuestion: '**Who is your ideal student** and what\'s the single biggest result they\'ll achieve from your course?',
+  },
+}
+
 // ── Computed ───────────────────────────────────────────────────────────────
 const canStart = computed(() => profile.name.trim() && profile.niche.trim())
 const FRAMES_PER_SCENE = 3
@@ -196,7 +241,7 @@ const selectedSceneIndex = ref(0)
 const timelineTrackRef = ref<HTMLElement | null>(null)
 
 const MIN_SCENE_DURATION = 2
-const MAX_SCENE_DURATION = 5
+const MAX_SCENE_DURATION = 10
 
 function clampSceneDuration(seconds: number) {
   return Math.round(Math.max(MIN_SCENE_DURATION, Math.min(MAX_SCENE_DURATION, seconds || MAX_SCENE_DURATION)))
@@ -502,23 +547,29 @@ async function callClaude(
   systemOverride?: string,
   opts?: { max_tokens?: number },
 ) {
-  const system = systemOverride || `You are an expert personal brand video strategist and content creator.
-The user is ${profile.name}, working in the ${profile.niche} niche.
-They create personal brand videos WITHOUT showing their face — using illustrated caricature scenes.
+  const cfg = projectSetup.videoType ? VIDEO_TYPE_CONFIG[projectSetup.videoType] : null
+  const system = systemOverride || [
+    cfg
+      ? `You are an expert ${cfg.persona} specializing in faceless illustrated brand videos.`
+      : `You are an expert personal brand video strategist specializing in faceless illustrated brand videos.`,
+    [
+      profile.name && `Creator: ${profile.name}`,
+      profile.niche && `Niche: ${profile.niche}`,
+      projectSetup.projectTitle && `Project: "${projectSetup.projectTitle}"`,
+      projectSetup.projectPurpose && `Goal: ${projectSetup.projectPurpose}`,
+      cfg && `Video type: ${cfg.label}`,
+    ].filter(Boolean).join(' | '),
+    `
+VIDEO FORMAT: Each scene is a DIFFERENT location (office, stage, outdoors, etc.). Within a scene, ${FRAMES_PER_SCENE} illustrated flipbook pages share the SAME background — only the character's pose changes per page.
 
-VIDEO FORMAT (flipbook style):
-- 4-6 scenes; EACH scene is a different place (office, stage, home, etc.) — backgrounds must change between scenes.
-- Within one scene: ${FRAMES_PER_SCENE} illustrated "pages" — SAME background/environment on every page, only the character's pose changes (like flipping pages in a draw-my-life book).
+YOUR ROLE:
+1. Ask ONE focused question at a time to deeply understand their story, audience, and message
+2. Be an expert in ${cfg?.label ?? 'video'} content — guide them toward a compelling narrative arc
+3. When you have enough detail (3-5 exchanges), say you're ready and suggest "Create My Video"
+4. Same illustrated character in every scene; different environment per scene
 
-Your job is to:
-1. Chat naturally; understand message, audience, and story
-2. Outline scenes with distinct locations per scene
-3. When ready, suggest "create video" or Create My Video
-4. Same character face/outfit everywhere (editorial vector caricature style); different environment per scene
-
-NEVER output raw JSON, code blocks, or script schemas in chat. The app builds the formal script separately when they create the video.
-
-Be concise, warm, and actionable. Use markdown when helpful.`
+NEVER output raw JSON, code blocks, or script schemas. Be concise, expert, and ask one question at a time.`,
+  ].join('\n')
 
   const data = await $fetch<{ content: { text: string }[] }>('/api/chat', {
     method: 'POST',
@@ -582,23 +633,28 @@ async function generateVideoScript() {
   const fromChat = findScriptInChat()
   if (fromChat) return normalizeScriptScenes(fromChat)
 
-  const system = `You are a professional video script writer for illustrated personal-brand videos.
-Creator: ${profile.name} (${profile.niche} niche).
-Output: short video script, 4-6 scenes, max ${MAX_SCENE_DURATION} seconds each (about 20-30 seconds total).
+  const cfg = projectSetup.videoType ? VIDEO_TYPE_CONFIG[projectSetup.videoType] : null
+  const system = `You are a professional video script writer for illustrated faceless brand videos.
+Creator: ${profile.name || 'the creator'}${profile.niche ? ` — ${profile.niche}` : ''}.
+${cfg ? `Video type: ${cfg.label}` : ''}${projectSetup.projectPurpose ? `\nGoal: ${projectSetup.projectPurpose}` : ''}
 
-FLIPBOOK MODEL: Each scene = a different location. Within a scene, exactly ${FRAMES_PER_SCENE} flipbook pages share the SAME background; only the character pose changes page to page. characterDescription is identical in every scene; imagePrompt MUST change the environment every scene.
+Based on the conversation and content complexity, decide the best:
+- Number of scenes: 4–8 (choose what best tells this story)
+- Duration per scene: ${MIN_SCENE_DURATION}–${MAX_SCENE_DURATION} seconds (choose based on how much narration each scene needs)
 
-IMPORTANT: Respond ONLY with valid JSON (no markdown). Schema:
+FLIPBOOK MODEL: Each scene = a different location. Within a scene, exactly ${FRAMES_PER_SCENE} flipbook pages share the SAME background; only the character pose changes. characterDescription is identical in every scene; imagePrompt MUST differ per scene.
+
+RESPOND ONLY with valid JSON (no markdown, no extra text). Schema:
 {
   "title": "Video title",
   "topic": "One sentence topic",
-  "characterDescription": "Fixed look for ${profile.name || 'the creator'}: face shape, hair, skin tone, outfit — editorial vector caricature (refined, not childish cartoon) — never change",
+  "characterDescription": "Fixed character look: face, hair, skin tone, outfit — semi-realistic vector caricature style — never changes",
   "scenes": [
     {
       "title": "Scene title",
-      "narration": "One short voiceover sentence (spoken in under 5 seconds)",
-      "imagePrompt": "UNIQUE setting for THIS scene only — specific room/place, background, props, lighting (e.g. busy open-plan office with glass walls). Must differ from other scenes.",
-      "framePrompts": ["page 1 pose", "page 2 pose", "page 3 pose"],
+      "narration": "Voiceover sentence — must fit comfortably within this scene's duration",
+      "imagePrompt": "UNIQUE location for this scene — specific room/place, props, lighting. Must differ from every other scene.",
+      "framePrompts": ["pose 1", "pose 2", "pose 3"],
       "duration": 5,
       "mood": "inspiring"
     }
@@ -606,13 +662,10 @@ IMPORTANT: Respond ONLY with valid JSON (no markdown). Schema:
 }
 
 Rules:
-- duration MUST be between ${MIN_SCENE_DURATION} and ${MAX_SCENE_DURATION} (integer seconds) for every scene.
-- narration MUST be brief enough to read aloud in under ${MAX_SCENE_DURATION} seconds.
-- Every scene MUST have a clearly different imagePrompt location than every other scene in this video.
-- framePrompts: exactly ${FRAMES_PER_SCENE} strings — character pose/expression only for that scene's story (no background words).
-- imagePrompt = environment for all ${FRAMES_PER_SCENE} pages in that scene; never reuse the same room across scenes unless the story requires it.
-- One person only (the creator).
-- Visual style: editorial vector caricature / refined magazine illustration — never childish cartoon or chibi.`
+- duration: integer between ${MIN_SCENE_DURATION} and ${MAX_SCENE_DURATION} — choose naturally based on narration length
+- Every scene MUST have a clearly different location in imagePrompt
+- framePrompts: exactly ${FRAMES_PER_SCENE} strings — character pose/expression only, no background mention
+- One person only. Visual style: semi-realistic vector caricature, editorial magazine illustration.`
 
   const msgs = [
     ...buildChatMessagesForScript(),
@@ -1437,11 +1490,35 @@ function showToastMsg(message: string, type = 'success') {
 }
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
 
+// ── New project chat start ─────────────────────────────────────────────────
+async function startNewProjectChat() {
+  await ensureUser()
+  await ensureSession()
+  screen.value = 'chat'
+  messages.value = []
+
+  const cfg = VIDEO_TYPE_CONFIG[projectSetup.videoType]
+  const namePart = profile.name ? `Hi ${profile.name}! ` : ''
+  const purposeBlock = projectSetup.projectPurpose
+    ? `\n\nYour goal: *${projectSetup.projectPurpose}*\n`
+    : ''
+
+  const greeting = [
+    `${namePart}I'm your AI **${cfg?.label ?? 'video'} creator** — let's make "${projectSetup.projectTitle}" exceptional.`,
+    purposeBlock,
+    `I'll ask you a few focused questions to fully understand your story before we build the script.\n\n${cfg?.firstQuestion ?? '**What\'s the core message** you want viewers to take away?'}`,
+  ].join('')
+
+  messages.value.push({ role: 'assistant', content: greeting, suggestCreate: false })
+  syncMessages([{ role: 'assistant', content: greeting }])
+}
+
 // ── Init ───────────────────────────────────────────────────────────────────
 onMounted(async () => {
   document.addEventListener('click', closeProjectMenu)
   const uid = localStorage.getItem('bm_user_id')
   const activeSession = localStorage.getItem('bm_active_session')
+  const newProjectRaw = localStorage.getItem('bm_new_project')
 
   if (!uid) return // stay on onboard
 
@@ -1470,6 +1547,26 @@ onMounted(async () => {
     return
   }
 
+  // ── New project from modal form ──────────────────────────────────────────
+  if (newProjectRaw) {
+    localStorage.removeItem('bm_new_project')
+    try {
+      const setup = JSON.parse(newProjectRaw) as {
+        videoType: string; title: string; purpose: string; photoBase64: string | null
+      }
+      projectSetup.videoType = setup.videoType
+      projectSetup.projectTitle = setup.title
+      projectSetup.projectPurpose = setup.purpose
+      videoProject.title = setup.title
+      if (setup.photoBase64 && !profile.photoBase64) {
+        profile.photoBase64 = setup.photoBase64
+        profile.photoUrl = `data:image/jpeg;base64,${setup.photoBase64}`
+      }
+    } catch { /* ignore parse errors */ }
+    await startNewProjectChat()
+    return
+  }
+
   // Load existing session if one was set from projects page
   if (activeSession) {
     sessionId.value = activeSession
@@ -1486,10 +1583,10 @@ onMounted(async () => {
     return
   }
 
-  // If profile exists, skip onboard and start a fresh chat
+  // Profile exists — skip onboard, start a fresh chat
   if (user?.name && user?.niche) {
     screen.value = 'chat'
-    const greeting = `Welcome back, ${user.name}! Ready to create another brand video? Tell me about your next idea!`
+    const greeting = `Welcome back, ${user.name}! Ready to create another video? Tell me about your next idea.`
     messages.value = [{ role: 'assistant', content: greeting, suggestCreate: false }]
     await ensureSession()
   }

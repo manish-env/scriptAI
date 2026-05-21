@@ -31,7 +31,7 @@ export default defineEventHandler(async (event) => {
         const id = prev?.id ?? uuid()
         const image_key = prev?.image_key ?? null
         const frame_keys = prev?.frame_keys ?? null
-        return stmt.bind(id, session_id, i, s.title, s.narration, s.imagePrompt, Math.min(5, Math.max(2, s.duration ?? 5)), s.mood ?? null, image_key, frame_keys)
+        return stmt.bind(id, session_id, i, s.title, s.narration, s.imagePrompt, Math.min(10, Math.max(2, s.duration ?? 5)), s.mood ?? null, image_key, frame_keys)
       }))
 
       const { results } = await env.DB

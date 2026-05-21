@@ -21,6 +21,55 @@ const loading = ref(true)
 const openMenuId = ref<string | null>(null)
 const toast = ref('')
 
+// ── New Project Modal ──────────────────────────────────────────────────────
+const showNewModal = ref(false)
+const creating = ref(false)
+const newPhotoInputEl = ref<HTMLInputElement | null>(null)
+const newPhotoPreview = ref<string | null>(null)
+const newPhotoBase64 = ref<string | null>(null)
+const form = reactive({ videoType: '', title: '', purpose: '' })
+
+const VIDEO_TYPES = [
+  { value: 'personal-brand',    label: '🎯 Personal Brand Story' },
+  { value: 'educational',       label: '📚 Educational Tutorial' },
+  { value: 'motivational',      label: '🔥 Motivational / Inspirational' },
+  { value: 'product-demo',      label: '🛍️ Product Demo' },
+  { value: 'how-to',            label: '🔧 How-To Guide' },
+  { value: 'case-study',        label: '📈 Case Study / Success Story' },
+  { value: 'thought-leadership',label: '💡 Thought Leadership' },
+  { value: 'course-teaser',     label: '🎓 Course / Program Teaser' },
+]
+
+function openNewProject() {
+  form.videoType = ''; form.title = ''; form.purpose = ''
+  newPhotoPreview.value = null; newPhotoBase64.value = null
+  showNewModal.value = true
+}
+
+function onNewPhotoSelected(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = ev => {
+    newPhotoPreview.value = ev.target?.result as string
+    newPhotoBase64.value = (ev.target?.result as string).split(',')[1]
+  }
+  reader.readAsDataURL(file)
+}
+
+function createProject() {
+  if (!form.videoType || !form.title.trim() || !form.purpose.trim()) return
+  creating.value = true
+  localStorage.setItem('bm_new_project', JSON.stringify({
+    videoType: form.videoType,
+    title: form.title.trim(),
+    purpose: form.purpose.trim(),
+    photoBase64: newPhotoBase64.value,
+  }))
+  localStorage.removeItem('bm_active_session')
+  navigateTo('/app')
+}
+
 onMounted(async () => {
   const userId = localStorage.getItem('bm_user_id')
   if (!userId) { navigateTo('/'); return }
@@ -37,10 +86,7 @@ onMounted(async () => {
   loading.value = false
 })
 
-function newProject() {
-  localStorage.removeItem('bm_active_session')
-  navigateTo('/app')
-}
+function newProject() { openNewProject() }
 
 function openProject(id: string) {
   localStorage.setItem('bm_active_session', id)
@@ -226,6 +272,74 @@ function timeAgo(iso: string) {
 
       <p v-if="toast" class="page-toast">{{ toast }}</p>
     </main>
+
+    <!-- ── New Project Modal ── -->
+    <Teleport to="body">
+      <Transition name="modal">
+        <div v-if="showNewModal" class="np-overlay" @click.self="showNewModal = false">
+          <div class="np-box">
+            <button class="np-close" @click="showNewModal = false">✕</button>
+            <div class="np-head">
+              <h2>New Project</h2>
+              <p>Tell us about your video — AI will become your expert creator for this type.</p>
+            </div>
+
+            <form class="np-form" @submit.prevent="createProject">
+
+              <div class="np-field">
+                <label>Video Type <span class="req">*</span></label>
+                <div class="type-grid">
+                  <button
+                    v-for="t in VIDEO_TYPES" :key="t.value"
+                    type="button"
+                    class="type-chip"
+                    :class="{ active: form.videoType === t.value }"
+                    @click="form.videoType = t.value"
+                  >{{ t.label }}</button>
+                </div>
+              </div>
+
+              <div class="np-field">
+                <label>Project Title <span class="req">*</span></label>
+                <input v-model="form.title" type="text" placeholder="e.g. My Brand Story 2025" required />
+              </div>
+
+              <div class="np-field">
+                <label>Purpose / Goal <span class="req">*</span></label>
+                <textarea
+                  v-model="form.purpose"
+                  placeholder="What should viewers feel, know, or do after watching? Be specific."
+                  rows="3"
+                  required
+                />
+              </div>
+
+              <div class="np-field">
+                <label>Your Photo <span class="optional">(optional — can add in profile)</span></label>
+                <div class="photo-zone" @click="newPhotoInputEl?.click()">
+                  <img v-if="newPhotoPreview" :src="newPhotoPreview" class="photo-thumb" alt="" />
+                  <div v-else class="photo-empty">
+                    <Icon name="lucide:camera" size="22" />
+                    <span>Upload your face photo</span>
+                    <small>Used to generate your illustrated character</small>
+                  </div>
+                </div>
+                <input ref="newPhotoInputEl" type="file" accept="image/*" style="display:none" @change="onNewPhotoSelected" />
+              </div>
+
+              <button
+                type="submit"
+                class="btn btn-primary btn-full"
+                :disabled="creating || !form.videoType || !form.title.trim() || !form.purpose.trim()"
+              >
+                <Icon name="lucide:sparkles" size="16" />
+                {{ creating ? 'Starting…' : 'Start Creating with AI →' }}
+              </button>
+            </form>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -479,5 +593,89 @@ function timeAgo(iso: string) {
   .top-bar { flex-direction: column; align-items: flex-start; }
   .projects-grid { grid-template-columns: 1fr 1fr; }
   .header-right .user-name { display: none; }
+}
+
+/* ── New Project Modal ── */
+.np-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.75);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 200; padding: 16px;
+}
+.np-box {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 36px 32px;
+  width: 100%; max-width: 520px;
+  position: relative;
+  max-height: 90dvh;
+  overflow-y: auto;
+}
+.np-close {
+  position: absolute; top: 14px; right: 14px;
+  background: var(--bg3); border: 1px solid var(--border);
+  color: var(--text2); width: 30px; height: 30px;
+  border-radius: 8px; cursor: pointer; font-size: 13px;
+}
+.np-head { margin-bottom: 24px; }
+.np-head h2 { font-size: 22px; font-weight: 800; margin-bottom: 6px; }
+.np-head p { color: var(--text2); font-size: 14px; line-height: 1.5; }
+.np-form { display: flex; flex-direction: column; gap: 20px; }
+.np-field { display: flex; flex-direction: column; gap: 8px; }
+.np-field label { font-size: 13px; font-weight: 600; color: var(--text); }
+.np-field input, .np-field textarea {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 14px;
+  color: var(--text); font-family: var(--font); font-size: 14px;
+  width: 100%; outline: none; resize: vertical;
+  transition: border-color 0.2s;
+}
+.np-field input:focus, .np-field textarea:focus { border-color: var(--accent); }
+.req { color: var(--accent); }
+.optional { color: var(--text2); font-weight: 400; font-size: 12px; }
+
+.type-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.type-chip {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 12px;
+  color: var(--text2); font-size: 13px; font-weight: 500;
+  cursor: pointer; text-align: left;
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+}
+.type-chip:hover { border-color: var(--accent); color: var(--text); }
+.type-chip.active {
+  border-color: var(--accent);
+  background: rgba(124,92,252,0.1);
+  color: var(--text);
+}
+
+.photo-zone {
+  background: var(--bg3); border: 1px dashed var(--border);
+  border-radius: 12px; cursor: pointer;
+  min-height: 90px;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; transition: border-color 0.2s;
+}
+.photo-zone:hover { border-color: var(--accent); }
+.photo-thumb { width: 100%; max-height: 160px; object-fit: cover; }
+.photo-empty {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 6px; color: var(--text2); padding: 20px;
+}
+.photo-empty span { font-size: 13px; font-weight: 500; }
+.photo-empty small { font-size: 11px; }
+
+.modal-enter-active, .modal-leave-active { transition: opacity 0.2s; }
+.modal-enter-from, .modal-leave-to { opacity: 0; }
+.modal-enter-from .np-box, .modal-leave-to .np-box { transform: scale(0.96) translateY(8px); }
+
+@media (max-width: 480px) {
+  .type-grid { grid-template-columns: 1fr; }
+  .np-box { padding: 24px 18px; }
 }
 </style>
