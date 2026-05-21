@@ -10,7 +10,7 @@ export default defineEventHandler(async (event) => {
   if (!['photo', 'scene_image', 'video'].includes(type)) throw createError({ statusCode: 400, message: 'invalid type' })
 
   if (!env.BUCKET) {
-    return { id: uuid(), key: `${type}/${user_id}/${uuid()}.jpg`, assetUrl: url }
+    return { id: uuid(), key: null, assetUrl: url }
   }
 
   const remote = await fetch(url)

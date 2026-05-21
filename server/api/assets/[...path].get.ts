@@ -1,13 +1,16 @@
+import { resolveAssetPath } from '../../utils/helpers'
+
 interface Env { BUCKET: R2Bucket }
 
 export default defineEventHandler(async (event) => {
   const env = (event.context.cloudflare?.env ?? {}) as Env
-  const path = (getRouterParam(event, 'path') as unknown as string[]).join('/')
+  const path = resolveAssetPath(event)
 
-  if (!env.BUCKET) throw createError({ statusCode: 404 })
+  if (!path) throw createError({ statusCode: 404, message: 'asset path required' })
+  if (!env.BUCKET) throw createError({ statusCode: 404, message: 'storage not configured' })
 
   const obj = await env.BUCKET.get(path)
-  if (!obj) throw createError({ statusCode: 404 })
+  if (!obj) throw createError({ statusCode: 404, message: 'asset not found' })
 
   const headers = new Headers()
   obj.writeHttpMetadata(headers)

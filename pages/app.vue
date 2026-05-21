@@ -95,7 +95,9 @@ async function uploadSceneImage(replicateUrl: string, sceneId?: string) {
       method: 'POST', body: { url: replicateUrl, type: 'scene_image', user_id: userId.value, session_id: sessionId.value },
     })
     if (res.assetUrl) {
-      if (sceneId) dbPatch(`/api/sessions/${sessionId.value}/scenes`, { scene_id: sceneId, image_key: res.key })
+      if (sceneId && res.key) {
+        dbPatch(`/api/sessions/${sessionId.value}/scenes`, { scene_id: sceneId, image_key: res.key })
+      }
       return res.assetUrl
     }
   } catch { /* fall through */ }
