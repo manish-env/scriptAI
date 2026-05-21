@@ -26,11 +26,11 @@ createApp({
     const messages = ref([]);
     const toast = reactive({ show: false, message: '', type: 'success' });
 
-    const videoProject = reactive({
-      title: '',
-      topic: '',
-      scenes: [],
-    });
+    const videoProject = reactive({ title: '', topic: '', scenes: [] });
+
+    // IDs for cloud sync (generated once, persisted in localStorage)
+    const userId = ref(LS.get('bm_user_id') || null);
+    const sessionId = ref(LS.get('bm_session_id') || null);
 
     // ── Computed ───────────────────────────────────────────────────────────
     const canStart = computed(() => profile.name.trim() && profile.niche.trim());
@@ -64,6 +64,8 @@ createApp({
       if (!confirm('Start a new video? This will clear the current chat and script.')) return;
       LS.del('bm_messages');
       LS.del('bm_project');
+      LS.del('bm_session_id');
+      sessionId.value = null;
       messages.value = [];
       videoProject.title = '';
       videoProject.topic = '';
@@ -72,6 +74,82 @@ createApp({
       showVideoPanel.value = false;
       screen.value = 'chat';
       startChat();
+    }
+
+    // ── Cloud sync (fire-and-forget — never blocks the UI) ─────────────────
+    async function dbPost(path, body) {
+      try {
+        await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      } catch (e) { console.warn('DB sync failed', path, e); }
+    }
+
+    async function dbPatch(path, body) {
+      try {
+        await fetch(path, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      } catch (e) { console.warn('DB sync failed', path, e); }
+    }
+
+    async function ensureUser() {
+      if (!userId.value) {
+        userId.value = crypto.randomUUID();
+        LS.set('bm_user_id', userId.value);
+      }
+      await dbPost('/api/user', { id: userId.value, name: profile.name, niche: profile.niche });
+    }
+
+    async function ensureSession() {
+      if (!sessionId.value) {
+        const res = await fetch('/api/sessions', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ user_id: userId.value }),
+        }).then(r => r.json()).catch(() => null);
+        if (res?.id) {
+          sessionId.value = res.id;
+          LS.set('bm_session_id', sessionId.value);
+        }
+      }
+    }
+
+    function syncMessages(msgs) {
+      if (!sessionId.value) return;
+      dbPost(`/api/sessions/${sessionId.value}/messages`, { messages: msgs.map(m => ({ role: m.role, content: m.content })) });
+    }
+
+    function syncScenes(scenes) {
+      if (!sessionId.value) return;
+      dbPost(`/api/sessions/${sessionId.value}/scenes`, { scenes });
+      dbPatch(`/api/sessions/${sessionId.value}`, { title: videoProject.title, topic: videoProject.topic });
+    }
+
+    async function uploadSceneImage(replicateUrl, sceneId) {
+      if (!userId.value || !sessionId.value) return replicateUrl;
+      try {
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ url: replicateUrl, type: 'scene_image', user_id: userId.value, session_id: sessionId.value }),
+        }).then(r => r.json());
+        if (res.assetUrl) {
+          dbPatch(`/api/sessions/${sessionId.value}/scenes`, { scene_id: sceneId, image_key: res.key });
+          return res.assetUrl;
+        }
+      } catch (e) { console.warn('R2 upload failed, using Replicate URL', e); }
+      return replicateUrl;
+    }
+
+    async function uploadUserPhoto(base64) {
+      if (!userId.value || !base64) return;
+      try {
+        const blob = await (await fetch(`data:image/jpeg;base64,${base64}`)).blob();
+        const dataUrl = URL.createObjectURL(blob);
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ url: dataUrl, type: 'photo', user_id: userId.value }),
+        }).then(r => r.json());
+        if (res.key) dbPost('/api/user', { id: userId.value, name: profile.name, niche: profile.niche, photo_key: res.key });
+      } catch (e) { console.warn('Photo upload failed', e); }
     }
 
     // ── Onboarding ─────────────────────────────────────────────────────────
@@ -90,7 +168,7 @@ createApp({
       reader.readAsDataURL(file);
     }
 
-    function startChat() {
+    async function startChat() {
       screen.value = 'chat';
       messages.value = [];
       const greeting = `Hi ${profile.name}! 👋 I'm your AI brand strategist. I'll help you create an amazing personal brand video in the **${profile.niche}** space — without showing your face on camera.
@@ -99,6 +177,11 @@ Let's start: **What's the main message or story you want your audience to take a
 
 Feel free to share your ideas, your audience, what transformation you offer — the more you tell me, the better your video will be!`;
       messages.value.push({ role: 'assistant', content: greeting, suggestCreate: false });
+
+      // Cloud sync — fire and forget
+      await ensureUser();
+      await ensureSession();
+      if (profile.photoBase64) uploadUserPhoto(profile.photoBase64);
     }
 
     // ── Chat ───────────────────────────────────────────────────────────────
@@ -129,6 +212,7 @@ Feel free to share your ideas, your audience, what transformation you offer — 
         const suggestCreate = /ready to create|shall i create|want me to create|should i build/i.test(reply);
         messages.value.push({ role: 'assistant', content: reply, suggestCreate });
         scrollToBottom();
+        syncMessages([{ role: 'user', content: text }, { role: 'assistant', content: reply }]);
       } catch (err) {
         aiTyping.value = false;
         showToast(err.message || 'API error', 'error');
@@ -200,6 +284,8 @@ Tap the **🎬 button** above to see your scenes and generate illustrated images
 
         messages.value.push({ role: 'assistant', content: summary, suggestCreate: false });
         scrollToBottom();
+        syncScenes(scriptJson.scenes);
+        syncMessages([{ role: 'assistant', content: summary }]);
       } catch (err) {
         aiTyping.value = false;
         showToast(err.message || 'Script generation failed', 'error');
@@ -266,8 +352,8 @@ IMPORTANT: Respond ONLY with valid JSON, no markdown, no explanation. Format:
       scene.generating = true;
 
       try {
-        const imageUrl = await callReplicate(scene.imagePrompt, profile.photoBase64);
-        scene.imageUrl = imageUrl;
+        const replicateUrl = await callReplicate(scene.imagePrompt, profile.photoBase64);
+        scene.imageUrl = await uploadSceneImage(replicateUrl, scene.id);
         scene.generating = false;
       } catch (err) {
         scene.generating = false;
@@ -528,7 +614,7 @@ IMPORTANT: Respond ONLY with valid JSON, no markdown, no explanation. Format:
     return {
       screen, showVideoPanel, aiTyping, generatingAll,
       videoUrl, selectedScene, inputText, photoInput, chatInput, messagesWrap, previewContent,
-      profile, messages, toast, videoProject,
+      profile, messages, toast, videoProject, userId, sessionId,
       canStart, allImagesReady,
       triggerPhotoUpload, onPhotoSelected, startChat, clearSession,
       sendMessage, triggerVideoCreation,
