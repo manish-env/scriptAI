@@ -3,8 +3,6 @@ name: D1 Migration
 on:
   push:
     branches: [main]
-    paths:
-      - schema.sql
   workflow_dispatch:
 
 jobs:
