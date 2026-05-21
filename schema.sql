@@ -1,4 +1,5 @@
 -- Run with: wrangler d1 execute brandme-db --file=schema.sql
+-- Migration v1
 
 CREATE TABLE IF NOT EXISTS users (
   id          TEXT PRIMARY KEY,
