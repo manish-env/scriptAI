@@ -54,6 +54,13 @@ const toast = reactive({ show: false, message: '', type: 'success' })
 // ── Computed ───────────────────────────────────────────────────────────────
 const canStart = computed(() => profile.name.trim() && profile.niche.trim())
 const allImagesReady = computed(() => videoProject.scenes.length > 0 && videoProject.scenes.every(s => s.imageUrl))
+const totalDuration = computed(() => videoProject.scenes.reduce((sum, s) => sum + (s.duration || 5), 0))
+const selectedSceneIndex = ref(0)
+
+function timelineWidth(scene: Scene) {
+  const total = totalDuration.value || 1
+  return `${((scene.duration || 5) / total) * 100}%`
+}
 
 // ── API helpers ────────────────────────────────────────────────────────────
 async function dbPost(path: string, body: unknown) {
@@ -596,29 +603,35 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- RIGHT: Preview / Scenes panel -->
+      <!-- RIGHT: Storyboard / video editor panel -->
       <div class="preview-panel" :class="{ 'mobile-active': screen === 'preview' }">
-        <header class="chat-header">
+        <header class="storyboard-toolbar">
           <button class="icon-btn mobile-only" @click="screen = 'chat'"><Icon name="lucide:arrow-left" size="18" /></button>
-          <div class="chat-header-info desktop-only">
-            <Icon name="lucide:layout-list" size="16" style="color: var(--text2)" />
-            <div>
-              <div class="chat-title">{{ videoProject.title || 'Scenes' }}</div>
-              <div class="chat-sub">{{ videoProject.scenes.length }} scene{{ videoProject.scenes.length !== 1 ? 's' : '' }}</div>
+          <div class="toolbar-brand">
+            <Icon name="lucide:clapperboard" size="18" class="toolbar-icon" />
+            <div class="toolbar-titles">
+              <div class="chat-title">{{ videoProject.title || 'Storyboard' }}</div>
+              <div class="chat-sub">
+                {{ videoProject.scenes.length }} scenes · {{ totalDuration }}s total
+              </div>
             </div>
           </div>
-          <div class="chat-header-info mobile-only">
-            <div>
-              <div class="chat-title">{{ videoProject.title || 'Your Video' }}</div>
-              <div class="chat-sub">{{ videoProject.scenes.length }} scenes</div>
-            </div>
+          <div class="toolbar-actions">
+            <button
+              v-if="!allImagesReady && videoProject.scenes.length"
+              class="btn btn-sm btn-outline"
+              :disabled="generatingAll"
+              @click="generateAllImages"
+            >
+              <Icon name="lucide:sparkles" size="14" />
+              {{ generatingAll ? 'Generating…' : 'Generate all' }}
+            </button>
+            <button v-if="allImagesReady && !videoUrl" class="btn btn-sm btn-primary" @click="assembleVideo">
+              <Icon name="lucide:film" size="14" /> Render
+            </button>
           </div>
-          <button v-if="allImagesReady && !videoUrl" class="btn btn-sm btn-primary" @click="assembleVideo">
-            <Icon name="lucide:film" size="14" /> Render
-          </button>
         </header>
 
-        <!-- Download / video player -->
         <div v-if="videoUrl" class="download-bar">
           <video :src="videoUrl" controls class="video-preview-mini" />
           <a :href="videoUrl" download="brand-video.webm" class="btn btn-primary btn-full mt-sm">
@@ -626,49 +639,86 @@ onMounted(async () => {
           </a>
         </div>
 
-        <!-- Empty state for right panel on desktop -->
         <div v-if="!videoProject.scenes.length" class="preview-empty">
           <div class="preview-empty-icon"><Icon name="lucide:film" size="36" /></div>
-          <p>Chat with AI and say <strong>"create video"</strong> to generate your script and scenes here.</p>
+          <p>Chat with AI and say <strong>"create video"</strong> to build your storyboard here.</p>
         </div>
 
-        <!-- Scenes list -->
-        <div v-else ref="previewContent" class="preview-content">
-          <div class="scenes-list">
-            <div v-for="(scene, i) in videoProject.scenes" :key="i" class="scene-card">
-              <div class="scene-card-header">
-                <div class="scene-badge">Scene {{ i + 1 }}</div>
-                <div class="scene-card-title">{{ scene.title }}</div>
-                <div class="scene-status-chip" :class="scene.imageUrl ? 'done' : scene.generating ? 'loading' : 'pending'">
-                  <span class="status-dot" />
-                  {{ scene.imageUrl ? 'Ready' : scene.generating ? 'Generating…' : 'Pending' }}
+        <div v-else class="storyboard-workspace">
+          <div ref="previewContent" class="filmstrip-scroll">
+            <div class="filmstrip-ruler">
+              <span class="ruler-label">Storyboard</span>
+              <span class="ruler-meta">Drag horizontally · click a frame to inspect</span>
+            </div>
+            <div class="filmstrip-track">
+              <div
+                v-for="(scene, i) in videoProject.scenes"
+                :key="i"
+                class="storyboard-frame"
+                :class="{ active: selectedSceneIndex === i, done: scene.imageUrl, loading: scene.generating }"
+                @click="selectedSceneIndex = i"
+              >
+                <div class="frame-connector" v-if="i > 0" />
+                <div class="frame-head">
+                  <span class="frame-num">{{ String(i + 1).padStart(2, '0') }}</span>
+                  <span class="frame-title">{{ scene.title }}</span>
+                  <span class="frame-status" :class="scene.imageUrl ? 'done' : scene.generating ? 'loading' : 'pending'">
+                    <span class="status-dot" />
+                  </span>
                 </div>
-              </div>
-              <div class="scene-image-wrap">
-                <img v-if="scene.imageUrl" :src="scene.imageUrl" class="scene-img" />
-                <div v-else-if="scene.generating" class="scene-img-placeholder generating">
-                  <div class="spinner" /><span>Generating image…</span>
+                <div class="frame-viewport" @click.stop="!scene.imageUrl && !scene.generating && generateSceneImage(i)">
+                  <img v-if="scene.imageUrl" :src="scene.imageUrl" class="frame-img" alt="" />
+                  <div v-else-if="scene.generating" class="frame-placeholder">
+                    <div class="spinner" /><span>Rendering…</span>
+                  </div>
+                  <div v-else class="frame-placeholder clickable">
+                    <Icon name="lucide:image-plus" size="26" />
+                    <span>Generate frame</span>
+                  </div>
+                  <span class="frame-duration">{{ scene.duration }}s</span>
                 </div>
-                <div v-else class="scene-img-placeholder" @click="generateSceneImage(i)">
-                  <Icon name="lucide:image" size="28" /><span>Click to generate</span>
+                <div class="frame-script-track">
+                  <Icon name="lucide:mic" size="12" class="track-icon" />
+                  <p class="frame-narration">{{ scene.narration }}</p>
                 </div>
-              </div>
-              <div class="scene-script">
-                <p class="scene-narration">{{ scene.narration }}</p>
-                <div class="scene-meta">
-                  <span class="scene-tag">{{ scene.duration }}s</span>
+                <div class="frame-tags">
                   <span class="scene-tag">{{ scene.mood }}</span>
                 </div>
-                <div class="scene-prompt-label">Image prompt</div>
-                <p class="scene-prompt-text">{{ scene.imagePrompt }}</p>
               </div>
             </div>
           </div>
-          <div v-if="!allImagesReady && videoProject.scenes.length" class="generate-all-wrap">
-            <button class="btn btn-primary btn-full" :disabled="generatingAll" @click="generateAllImages">
-              <Icon name="lucide:sparkles" size="16" />
-              {{ generatingAll ? 'Generating Images…' : 'Generate All Scene Images' }}
-            </button>
+
+          <div class="timeline-panel">
+            <div class="timeline-header">
+              <span class="timeline-label"><Icon name="lucide:timer" size="13" /> Timeline</span>
+              <span class="timeline-total">{{ totalDuration }}s</span>
+            </div>
+            <div class="timeline-track">
+              <div
+                v-for="(scene, i) in videoProject.scenes"
+                :key="'tl-' + i"
+                class="timeline-clip"
+                :style="{ flex: `0 0 ${timelineWidth(scene)}` }"
+                :class="{ active: selectedSceneIndex === i, done: scene.imageUrl }"
+                @click="selectedSceneIndex = i"
+              >
+                <span class="clip-num">{{ i + 1 }}</span>
+                <span class="clip-dur">{{ scene.duration }}s</span>
+              </div>
+            </div>
+            <div class="timeline-playhead" />
+          </div>
+
+          <div v-if="videoProject.scenes[selectedSceneIndex]" class="inspector-panel">
+            <div class="inspector-head">
+              <span class="inspector-badge">Scene {{ selectedSceneIndex + 1 }}</span>
+              <strong>{{ videoProject.scenes[selectedSceneIndex].title }}</strong>
+            </div>
+            <p class="inspector-narration">{{ videoProject.scenes[selectedSceneIndex].narration }}</p>
+            <div class="inspector-prompt">
+              <span class="scene-prompt-label">Visual prompt</span>
+              <p class="scene-prompt-text">{{ videoProject.scenes[selectedSceneIndex].imagePrompt }}</p>
+            </div>
           </div>
         </div>
       </div>
@@ -729,27 +779,28 @@ onMounted(async () => {
   min-width: 0;
 }
 
-/* ── Preview Panel ── */
+/* ── Preview / Storyboard Panel ── */
 .preview-panel {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-width: 0;
   width: 0;
   overflow: hidden;
-  transition: width 0.3s ease;
-  background: var(--bg);
+  background: #0a0a0c;
 }
 
-/* Show preview panel on desktop always */
 @media (min-width: 768px) {
   .app-shell.has-scenes .preview-panel {
-    width: 52%;
-    flex-shrink: 0;
+    flex: 1;
+    width: auto;
+    min-width: 0;
   }
   .app-shell.has-scenes .chat-panel {
-    flex: 0 0 48%;
-    max-width: 520px;
+    flex: 0 0 auto;
+    width: min(36vw, 400px);
+    max-width: 400px;
   }
-  /* Hide mobile-only elements on desktop */
   .mobile-only { display: none !important; }
 }
 
@@ -836,32 +887,310 @@ onMounted(async () => {
 .send-btn:hover:not(:disabled) { transform:scale(1.08); }
 .send-btn:disabled { opacity:0.45; cursor:not-allowed; }
 
-/* Preview panel content */
-.download-bar { flex-shrink:0; padding:12px 16px; background:var(--bg2); border-bottom:1px solid var(--border); }
-.video-preview-mini { width:100%; border-radius:var(--radius-sm); display:block; max-height:200px; background:#000; }
-.mt-sm { margin-top:12px; }
-.preview-content { flex:1; overflow-x:auto; overflow-y:hidden; padding:16px; display:flex; align-items:flex-start; }
-.scenes-list { display:flex; flex-direction:row; gap:16px; }
+/* Storyboard toolbar */
+.storyboard-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.toolbar-brand { flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.toolbar-icon { color: var(--accent); flex-shrink: 0; }
+.toolbar-titles { min-width: 0; }
+.toolbar-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
-/* Scene card */
-.scene-card { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; flex-shrink:0; width:340px; }
-.scene-card-header { display:flex; align-items:center; gap:10px; padding:14px 16px 10px; flex-wrap:wrap; }
-.scene-badge { background:rgba(124,92,252,0.15); color:var(--accent); border-radius:6px; padding:3px 8px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; flex-shrink:0; }
-.scene-card-title { font-weight:600; font-size:14px; flex:1; }
-.scene-status-chip { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--text2); flex-shrink:0; }
-.scene-image-wrap { width:100%; aspect-ratio:16/9; background:var(--bg3); overflow:hidden; }
-.scene-img { width:100%; height:100%; object-fit:cover; }
-.scene-img-placeholder { width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--text2); font-size:13px; cursor:pointer; transition: background 0.2s; }
-.scene-img-placeholder:not(.generating):hover { background: rgba(124,92,252,0.05); color: var(--accent); }
-.scene-img-placeholder.generating { cursor:default; }
-.scene-script { padding:14px 16px; }
-.scene-narration { font-size:14px; line-height:1.6; margin-bottom:10px; }
-.scene-meta { display:flex; gap:6px; margin-bottom:10px; }
-.scene-tag { background:var(--bg3); border:1px solid var(--border); border-radius:6px; padding:3px 8px; font-size:11px; color:var(--text2); }
-.scene-prompt-label { font-size:11px; color:var(--text2); text-transform:uppercase; letter-spacing:0.5px; font-weight:600; margin-bottom:4px; }
-.scene-prompt-text { font-size:12px; color:var(--text2); line-height:1.5; font-style:italic; }
-.generate-all-wrap { margin-top:8px; }
-.spinner { width:28px; height:28px; border:3px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin 0.8s linear infinite; }
+.download-bar { flex-shrink: 0; padding: 12px 16px; background: var(--bg2); border-bottom: 1px solid var(--border); }
+.video-preview-mini { width: 100%; border-radius: var(--radius-sm); display: block; max-height: 200px; background: #000; }
+.mt-sm { margin-top: 12px; }
+
+/* Storyboard workspace */
+.storyboard-workspace {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.filmstrip-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+  padding: 12px 16px 8px;
+  background:
+    linear-gradient(90deg, rgba(124, 92, 252, 0.03) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px) 0 0 / 24px 24px,
+    #0a0a0c;
+}
+
+.filmstrip-ruler {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding: 0 4px;
+}
+.ruler-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+.ruler-meta { font-size: 11px; color: var(--text2); }
+
+.filmstrip-track {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding-bottom: 8px;
+  min-width: min-content;
+}
+
+.storyboard-frame {
+  position: relative;
+  flex: 0 0 280px;
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s;
+  margin-left: 12px;
+}
+.storyboard-frame:first-child { margin-left: 0; }
+.storyboard-frame:hover { border-color: rgba(124, 92, 252, 0.45); }
+.storyboard-frame.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 8px 32px rgba(124, 92, 252, 0.2);
+  transform: translateY(-2px);
+}
+.storyboard-frame.done .frame-viewport { border-bottom-color: rgba(34, 197, 94, 0.35); }
+
+.frame-connector {
+  position: absolute;
+  left: -12px;
+  top: 50%;
+  width: 12px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--border));
+  transform: translateY(-50%);
+}
+.frame-connector::after {
+  content: '';
+  position: absolute;
+  right: -3px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border: 2px solid var(--border);
+  border-radius: 50%;
+  transform: translateY(-50%);
+  background: var(--bg);
+}
+
+.frame-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+}
+.frame-num {
+  font-size: 10px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  letter-spacing: 0.05em;
+}
+.frame-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.frame-status { flex-shrink: 0; }
+.frame-status .status-dot { width: 8px; height: 8px; }
+.frame-status.done .status-dot { background: var(--success); }
+.frame-status.loading .status-dot { background: var(--warn); animation: pulse 1s infinite; }
+.frame-status.pending .status-dot { background: var(--border); }
+
+.frame-viewport {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  overflow: hidden;
+  border-bottom: 2px solid var(--border);
+}
+.frame-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.frame-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text2);
+  font-size: 12px;
+  background: var(--bg3);
+}
+.frame-placeholder.clickable { cursor: pointer; transition: background 0.2s, color 0.2s; }
+.frame-placeholder.clickable:hover { background: rgba(124, 92, 252, 0.08); color: var(--accent); }
+.frame-duration {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+}
+
+.frame-script-track {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.25);
+  border-bottom: 1px solid var(--border);
+  min-height: 52px;
+}
+.track-icon { color: var(--accent2); flex-shrink: 0; margin-top: 2px; opacity: 0.8; }
+.frame-narration {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text2);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.frame-tags { padding: 6px 10px 8px; display: flex; gap: 6px; }
+.scene-tag {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 10px;
+  color: var(--text2);
+  text-transform: capitalize;
+}
+
+/* Timeline rail */
+.timeline-panel {
+  flex-shrink: 0;
+  padding: 10px 16px 12px;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+  position: relative;
+}
+.timeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.timeline-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text2);
+}
+.timeline-total { font-size: 11px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+.timeline-track {
+  display: flex;
+  height: 36px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+}
+.timeline-clip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 32px;
+  border-right: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(124, 92, 252, 0.12), rgba(124, 92, 252, 0.04));
+  cursor: pointer;
+  transition: background 0.15s, filter 0.15s;
+}
+.timeline-clip:last-child { border-right: none; }
+.timeline-clip:hover { filter: brightness(1.15); }
+.timeline-clip.active {
+  background: linear-gradient(180deg, rgba(124, 92, 252, 0.35), rgba(124, 92, 252, 0.15));
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.timeline-clip.done { background: linear-gradient(180deg, rgba(34, 197, 94, 0.2), rgba(34, 197, 94, 0.06)); }
+.clip-num { font-size: 10px; font-weight: 800; color: var(--text); }
+.clip-dur { font-size: 9px; color: var(--text2); font-variant-numeric: tabular-nums; }
+.timeline-playhead {
+  position: absolute;
+  left: 16px;
+  top: 38px;
+  width: 2px;
+  height: 36px;
+  background: var(--accent2);
+  border-radius: 1px;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Inspector (selected scene detail) */
+.inspector-panel {
+  flex-shrink: 0;
+  max-height: 120px;
+  overflow-y: auto;
+  padding: 10px 16px 12px;
+  background: #111116;
+  border-top: 1px solid var(--border);
+}
+.inspector-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.inspector-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  background: rgba(124, 92, 252, 0.12);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.inspector-head strong { font-size: 13px; }
+.inspector-narration { font-size: 12px; line-height: 1.5; color: var(--text2); margin-bottom: 8px; }
+.inspector-prompt { border-left: 2px solid var(--border); padding-left: 10px; }
+.scene-prompt-label { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 3px; display: block; }
+.scene-prompt-text { font-size: 11px; color: var(--text2); line-height: 1.45; font-style: italic; }
+
+.spinner { width: 28px; height: 28px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
 
 /* Toast */
 .toast { position:fixed; bottom:90px; left:50%; transform:translateX(-50%); background:var(--bg2); border:1px solid var(--border); border-radius:12px; padding:12px 20px; font-size:14px; z-index:200; white-space:nowrap; box-shadow:0 4px 24px rgba(0,0,0,0.4); }
