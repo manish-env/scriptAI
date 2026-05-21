@@ -1269,7 +1269,6 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
   const sceneImages = await Promise.all(
     scenes.map(s => Promise.all(sceneFrameUrls(s).map(url => loadImage(url)))),
   )
-
   const sceneDurationsSec = scenes.map(s => sceneDurationSeconds(s))
 
   const canvas = document.createElement('canvas')
@@ -1282,30 +1281,16 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
   const videoStream = canvas.captureStream(FPS)
   const hasNarration = narrationBuffers.some(b => b.duration > 0.05)
   let audioCtx: AudioContext | null = null
+  let audioDest: MediaStreamAudioDestinationNode | null = null
   let recorderStream: MediaStream = videoStream
 
   if (hasNarration) {
     audioCtx = new AudioContext()
     await audioCtx.resume()
-    const dest = audioCtx.createMediaStreamDestination()
-    let t = 0
-    for (let i = 0; i < scenes.length; i++) {
-      const buf = narrationBuffers[i]
-      if (!buf || buf.duration < 0.05) {
-        t += sceneDurationsSec[i]
-        continue
-      }
-      const src = audioCtx.createBufferSource()
-      src.buffer = buf
-      const slotSec = sceneDurationsSec[i]
-      if (buf.duration > slotSec) src.playbackRate.value = buf.duration / slotSec
-      src.connect(dest)
-      src.start(audioCtx.currentTime + t)
-      t += sceneDurationsSec[i]
-    }
+    audioDest = audioCtx.createMediaStreamDestination()
     recorderStream = new MediaStream([
       ...videoStream.getVideoTracks(),
-      ...dest.stream.getAudioTracks(),
+      ...audioDest.stream.getAudioTracks(),
     ])
   }
 
@@ -1331,14 +1316,29 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
   recorder.start(100)
   if (hasNarration && audioCtx) await sleep(80)
 
+  // Fire each scene's audio at the exact moment its content frames begin rendering
+  // (after the crossfade) so audio and video stay in sync regardless of render speed.
+  function startSceneAudio(si: number, contentDurationSec: number) {
+    if (!audioCtx || !audioDest) return
+    const buf = narrationBuffers[si]
+    if (!buf || buf.duration < 0.05) return
+    const src = audioCtx.createBufferSource()
+    src.buffer = buf
+    if (buf.duration > contentDurationSec) src.playbackRate.value = buf.duration / contentDurationSec
+    src.connect(audioDest)
+    src.start(audioCtx.currentTime)
+  }
+
   for (let si = 0; si < scenes.length; si++) {
     const scene = scenes[si]
     const imgs = sceneImages[si]
     if (!imgs.length) continue
     const motion = MOTION_PRESETS[si % MOTION_PRESETS.length]
-    const frames = Math.max(FPS * 2, Math.floor(sceneDurationsSec[si] * FPS))
+    const totalFrames = Math.max(FPS * 2, Math.floor(sceneDurationsSec[si] * FPS))
+    const hasCrossfade = si > 0
 
-    if (si > 0 && imgs.length) {
+    // Step 1: crossfade transition from previous scene
+    if (hasCrossfade) {
       const prevImgs = sceneImages[si - 1]
       const prevImg = prevImgs[prevImgs.length - 1] ?? imgs[0]
       for (let f = 0; f < CROSSFADE_FRAMES; f++) {
@@ -1350,32 +1350,27 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
         drawSceneFrame(ctx, imgs[0], W, H, 0, motion, 0)
         ctx.restore()
         drawPaperBorder(ctx, W, H)
-        drawSceneOverlays(ctx, scene, W, H, f, frames)
+        drawSceneOverlays(ctx, scene, W, H, f, totalFrames)
         await waitVideoFrame(videoStream, FPS)
       }
-      const bookFrames = frames - CROSSFADE_FRAMES
-      if (imgs.length >= FRAMES_PER_SCENE) {
-        await renderSceneFlipbook(ctx, scene, imgs, W, H, FPS, bookFrames, videoStream, CROSSFADE_FRAMES)
-      } else {
-        for (let f = CROSSFADE_FRAMES; f < frames; f++) {
-          const localF = f - CROSSFADE_FRAMES
-          const progress = easeInOutCubic(localF / Math.max(frames - CROSSFADE_FRAMES - 1, 1))
-          const wiggle = Math.sin(f * 0.12) * 0.012
-          drawSceneFrame(ctx, imgs[0], W, H, progress, motion, wiggle)
-          drawPaperBorder(ctx, W, H)
-          drawSceneOverlays(ctx, scene, W, H, f, frames)
-          await waitVideoFrame(videoStream, FPS)
-        }
-      }
-    } else if (imgs.length >= FRAMES_PER_SCENE) {
-      await renderSceneFlipbook(ctx, scene, imgs, W, H, FPS, frames, videoStream, 0)
+    }
+
+    // Step 2: fire narration exactly when scene content starts
+    const contentFrames = hasCrossfade ? totalFrames - CROSSFADE_FRAMES : totalFrames
+    startSceneAudio(si, contentFrames / FPS)
+
+    // Step 3: render scene content frames
+    if (imgs.length >= FRAMES_PER_SCENE) {
+      await renderSceneFlipbook(ctx, scene, imgs, W, H, FPS, contentFrames, videoStream, hasCrossfade ? CROSSFADE_FRAMES : 0)
     } else {
-      for (let f = 0; f < frames; f++) {
-        const progress = easeInOutCubic(f / Math.max(frames - 1, 1))
+      const startF = hasCrossfade ? CROSSFADE_FRAMES : 0
+      for (let f = startF; f < totalFrames; f++) {
+        const localF = f - startF
+        const progress = easeInOutCubic(localF / Math.max(contentFrames - 1, 1))
         const wiggle = Math.sin(f * 0.12) * 0.012
         drawSceneFrame(ctx, imgs[0], W, H, progress, motion, wiggle)
         drawPaperBorder(ctx, W, H)
-        drawSceneOverlays(ctx, scene, W, H, f, frames)
+        drawSceneOverlays(ctx, scene, W, H, f, totalFrames)
         await waitVideoFrame(videoStream, FPS)
       }
     }
