@@ -1,6 +1,10 @@
 <script setup lang="ts">
 useHead({ title: 'BrandMe AI — Personal Brand Videos Without Showing Your Face' })
 
+onMounted(() => {
+  if (localStorage.getItem('bm_user_id')) navigateTo('/projects')
+})
+
 const authModal = ref<'login' | 'signup' | null>(null)
 const navOpen = ref(false)
 const authLoading = ref(false)
