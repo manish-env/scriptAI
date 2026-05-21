@@ -37,6 +37,7 @@ const screen = ref<Screen>('onboard')
 const showVideoPanel = ref(false)
 const aiTyping = ref(false)
 const generatingAll = ref(false)
+const renderingVideo = ref(false)
 const videoUrl = ref<string | null>(null)
 const inputText = ref('')
 const messagesWrap = ref<HTMLElement | null>(null)
@@ -378,10 +379,19 @@ async function pollReplicate(id: string, max = 60) {
   throw new Error('Image generation timed out')
 }
 
-// ── Video Assembly ─────────────────────────────────────────────────────────
+// ── Video Assembly (cinematic compositor) ───────────────────────────────────
+const VIDEO_W = 1280
+const VIDEO_H = 720
+const VIDEO_FPS = 30
+const VIDEO_BITRATE = 10_000_000
+const CROSSFADE_FRAMES = 18
+const MOTION_PRESETS = ['zoom-in', 'zoom-out', 'pan-left', 'pan-right', 'drift-up'] as const
+type MotionPreset = typeof MOTION_PRESETS[number]
+
 async function assembleVideo() {
-  if (!allImagesReady.value) return
-  showToastMsg('Assembling video…')
+  if (!allImagesReady.value || renderingVideo.value) return
+  renderingVideo.value = true
+  showToastMsg('Rendering cinematic video…')
   try {
     const url = await buildVideoFromImages(videoProject.scenes)
     videoUrl.value = url
@@ -389,70 +399,304 @@ async function assembleVideo() {
     nextTick(() => { if (previewContent.value) previewContent.value.scrollTop = 0 })
   } catch (e: unknown) {
     showToastMsg('Assembly failed: ' + (e as Error).message, 'error')
+  } finally {
+    renderingVideo.value = false
+  }
+}
+
+function easeInOutCubic(t: number) {
+  return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2
+}
+
+function easeOutCubic(t: number) {
+  return 1 - (1 - t) ** 3
+}
+
+function pickVideoMimeType() {
+  const candidates = [
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+    'video/mp4',
+  ]
+  return candidates.find(t => MediaRecorder.isTypeSupported(t)) || ''
+}
+
+async function waitVideoFrame(stream: MediaStream, fps: number) {
+  const track = stream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void }
+  track?.requestFrame?.()
+  await new Promise<void>(r => setTimeout(r, 1000 / fps))
+}
+
+function drawSceneFrame(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  W: number,
+  H: number,
+  progress: number,
+  motion: MotionPreset,
+) {
+  ctx.fillStyle = '#050508'
+  ctx.fillRect(0, 0, W, H)
+
+  const ir = img.width / img.height
+  const cr = W / H
+  let dw: number
+  let dh: number
+  if (ir > cr) {
+    dh = H
+    dw = H * ir
+  } else {
+    dw = W
+    dh = W / ir
+  }
+
+  let zoom0 = 1.02
+  let zoom1 = 1.12
+  let panX0 = 0
+  let panX1 = 0
+  let panY0 = 0
+  let panY1 = 0
+
+  switch (motion) {
+    case 'zoom-out':
+      zoom0 = 1.14
+      zoom1 = 1.03
+      break
+    case 'pan-left':
+      panX0 = 0
+      panX1 = -0.06 * dw
+      zoom1 = 1.1
+      break
+    case 'pan-right':
+      panX0 = -0.06 * dw
+      panX1 = 0
+      zoom1 = 1.1
+      break
+    case 'drift-up':
+      panY0 = 0
+      panY1 = -0.04 * dh
+      zoom1 = 1.08
+      break
+    default:
+      zoom1 = 1.13
+  }
+
+  const zoom = zoom0 + (zoom1 - zoom0) * progress
+  const panX = panX0 + (panX1 - panX0) * progress
+  const panY = panY0 + (panY1 - panY0) * progress
+  const sw = dw * zoom
+  const sh = dh * zoom
+  const x = (W - sw) / 2 + panX
+  const y = (H - sh) / 2 + panY
+
+  ctx.drawImage(img, x, y, sw, sh)
+  drawVignette(ctx, W, H)
+  drawColorGrade(ctx, W, H)
+}
+
+function drawVignette(ctx: CanvasRenderingContext2D, W: number, H: number) {
+  const g = ctx.createRadialGradient(W / 2, H / 2, H * 0.25, W / 2, H / 2, H * 0.85)
+  g.addColorStop(0, 'rgba(0,0,0,0)')
+  g.addColorStop(1, 'rgba(0,0,0,0.45)')
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, W, H)
+}
+
+function drawColorGrade(ctx: CanvasRenderingContext2D, W: number, H: number) {
+  ctx.fillStyle = 'rgba(18,12,32,0.08)'
+  ctx.fillRect(0, 0, W, H)
+  const g = ctx.createLinearGradient(0, H * 0.45, 0, H)
+  g.addColorStop(0, 'rgba(0,0,0,0)')
+  g.addColorStop(1, 'rgba(0,0,0,0.55)')
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, W, H)
+}
+
+function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number) {
+  const words = text.split(' ')
+  const lines: string[] = []
+  let line = ''
+  for (const w of words) {
+    const test = line ? `${line} ${w}` : w
+    if (ctx.measureText(test).width > maxW && line) {
+      lines.push(line)
+      line = w
+    } else {
+      line = test
+    }
+  }
+  if (line) lines.push(line)
+  return lines
+}
+
+function drawTitleCard(ctx: CanvasRenderingContext2D, title: string, W: number, H: number, alpha: number) {
+  if (alpha <= 0) return
+  ctx.save()
+  ctx.globalAlpha = alpha
+  const x = W * 0.06
+  const y = H * 0.08
+  ctx.font = `800 ${Math.round(W * 0.038)}px Inter, system-ui, sans-serif`
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'top'
+  ctx.shadowColor = 'rgba(0,0,0,0.85)'
+  ctx.shadowBlur = 16
+  ctx.fillStyle = '#ffffff'
+  ctx.fillText(title.toUpperCase(), x, y)
+  ctx.shadowBlur = 0
+  ctx.fillStyle = 'rgba(124,92,252,0.95)'
+  ctx.fillRect(x, y + W * 0.048, W * 0.14, 4)
+  ctx.restore()
+}
+
+function drawCaptionOverlay(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  W: number,
+  H: number,
+  reveal: number,
+) {
+  if (reveal <= 0) return
+  const fontSize = Math.round(W * 0.028)
+  ctx.font = `600 ${fontSize}px Inter, system-ui, sans-serif`
+  const maxW = W * 0.78
+  const lines = wrapText(ctx, text, maxW)
+  const lineH = fontSize * 1.38
+  const padX = 22
+  const padY = 14
+  const blockH = lines.length * lineH + padY * 2
+  const blockW = Math.min(
+    maxW + padX * 2,
+    Math.max(...lines.map(l => ctx.measureText(l).width), 0) + padX * 2,
+  )
+  const blockX = (W - blockW) / 2
+  const blockY = H - blockH - H * 0.07
+
+  ctx.save()
+  ctx.globalAlpha = easeOutCubic(Math.min(1, reveal)) * 0.96
+  ctx.fillStyle = 'rgba(8,8,12,0.72)'
+  roundRect(ctx, blockX, blockY, blockW, blockH, 10)
+  ctx.fill()
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)'
+  ctx.lineWidth = 1
+  roundRect(ctx, blockX, blockY, blockW, blockH, 10)
+  ctx.stroke()
+
+  ctx.fillStyle = '#ffffff'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'top'
+  ctx.shadowColor = 'rgba(0,0,0,0.5)'
+  ctx.shadowBlur = 6
+  const visibleLines = Math.ceil(lines.length * Math.min(1, reveal * 1.15))
+  lines.slice(0, visibleLines).forEach((l, i) => {
+    const lineAlpha = Math.min(1, (reveal * lines.length - i) * 1.4)
+    ctx.globalAlpha = easeOutCubic(lineAlpha) * 0.96
+    ctx.fillText(l, W / 2, blockY + padY + i * lineH)
+  })
+  ctx.restore()
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath()
+  ctx.moveTo(x + r, y)
+  ctx.lineTo(x + w - r, y)
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r)
+  ctx.lineTo(x + w, y + h - r)
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h)
+  ctx.lineTo(x + r, y + h)
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r)
+  ctx.lineTo(x, y + r)
+  ctx.quadraticCurveTo(x, y, x + r, y)
+  ctx.closePath()
+}
+
+function drawSceneOverlays(
+  ctx: CanvasRenderingContext2D,
+  scene: Scene,
+  W: number,
+  H: number,
+  frame: number,
+  totalFrames: number,
+) {
+  const titleFrames = VIDEO_FPS * 1.8
+  if (frame < titleFrames) {
+    const titleAlpha = frame < VIDEO_FPS * 0.4
+      ? frame / (VIDEO_FPS * 0.4)
+      : 1 - (frame - VIDEO_FPS * 1.2) / (VIDEO_FPS * 0.6)
+    drawTitleCard(ctx, scene.title, W, H, Math.max(0, Math.min(1, titleAlpha)))
+  }
+
+  const captionStart = VIDEO_FPS * 0.35
+  const captionEnd = totalFrames - VIDEO_FPS * 0.4
+  if (frame > captionStart && frame < captionEnd) {
+    const captionReveal = (frame - captionStart) / (captionEnd - captionStart)
+    drawCaptionOverlay(ctx, scene.narration, W, H, captionReveal)
   }
 }
 
 async function buildVideoFromImages(scenes: Scene[]) {
-  const W = 1280, H = 720, FPS = 30
-  const canvas = document.createElement('canvas')
-  canvas.width = W; canvas.height = H
-  const ctx = canvas.getContext('2d')!
-  const stream = canvas.captureStream(FPS)
-  const chunks: BlobPart[] = []
-  const mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'].find(t => MediaRecorder.isTypeSupported(t)) || ''
-  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {})
-  recorder.ondataavailable = e => { if ((e as BlobEvent).data.size > 0) chunks.push((e as BlobEvent).data) }
-  recorder.start()
+  const W = VIDEO_W
+  const H = VIDEO_H
+  const FPS = VIDEO_FPS
+  const images = await Promise.all(scenes.map(s => loadImage(s.imageUrl!)))
 
-  for (const scene of scenes) {
-    const img = await loadImage(scene.imageUrl!)
-    const frames = Math.floor((scene.duration || 5) * FPS)
-    for (let f = 0; f < frames; f++) {
-      const p = f / frames
-      const scale = 1 + 0.05 * p
-      ctx.save()
-      ctx.translate(-(W * (scale - 1)) / 2 * 0.3 * p, -(H * (scale - 1)) / 2)
-      ctx.scale(scale, scale)
-      ctx.drawImage(img, 0, 0, W, H)
-      ctx.restore()
-      drawTextOverlay(ctx, scene.narration, W, H)
-      if (f < FPS * 2) {
-        const alpha = Math.min(1, f / (FPS * 0.5)) * (1 - Math.max(0, (f - FPS * 1.5) / (FPS * 0.5)))
-        drawSceneTitle(ctx, scene.title, W, H, alpha)
-      }
-      await sleep(1000 / FPS)
+  const canvas = document.createElement('canvas')
+  canvas.width = W
+  canvas.height = H
+  const ctx = canvas.getContext('2d', { alpha: false })!
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+
+  const stream = canvas.captureStream(FPS)
+  const mimeType = pickVideoMimeType()
+  const chunks: BlobPart[] = []
+  const recorder = new MediaRecorder(stream, {
+    mimeType: mimeType || undefined,
+    videoBitsPerSecond: VIDEO_BITRATE,
+    bitsPerSecond: VIDEO_BITRATE,
+  } as MediaRecorderOptions)
+  recorder.ondataavailable = e => {
+    if ((e as BlobEvent).data.size > 0) chunks.push((e as BlobEvent).data)
+  }
+
+  const done = new Promise<string>((resolve) => {
+    recorder.onstop = () => {
+      resolve(URL.createObjectURL(new Blob(chunks, { type: mimeType || 'video/webm' })))
     }
-    for (let f = 0; f < FPS * 0.5; f++) {
-      ctx.fillStyle = `rgba(0,0,0,${f / (FPS * 0.5)})`
-      ctx.fillRect(0, 0, W, H)
-      await sleep(1000 / FPS)
+  })
+
+  recorder.start(100)
+
+  for (let si = 0; si < scenes.length; si++) {
+    const scene = scenes[si]
+    const img = images[si]
+    const motion = MOTION_PRESETS[si % MOTION_PRESETS.length]
+    const frames = Math.max(FPS * 2, Math.floor((scene.duration || 5) * FPS))
+
+    for (let f = 0; f < frames; f++) {
+      const isCrossfade = si > 0 && f < CROSSFADE_FRAMES
+      if (isCrossfade) {
+        const blend = easeInOutCubic(f / CROSSFADE_FRAMES)
+        const prevMotion = MOTION_PRESETS[(si - 1) % MOTION_PRESETS.length]
+        drawSceneFrame(ctx, images[si - 1], W, H, 1, prevMotion)
+        ctx.save()
+        ctx.globalAlpha = blend
+        drawSceneFrame(ctx, img, W, H, 0, motion)
+        ctx.restore()
+        drawSceneOverlays(ctx, scene, W, H, f, frames)
+      } else {
+        const localF = si > 0 ? f - CROSSFADE_FRAMES : f
+        const localTotal = si > 0 ? frames - CROSSFADE_FRAMES : frames
+        const progress = easeInOutCubic(localF / Math.max(localTotal - 1, 1))
+        drawSceneFrame(ctx, img, W, H, progress, motion)
+        drawSceneOverlays(ctx, scene, W, H, f, frames)
+      }
+      await waitVideoFrame(stream, FPS)
     }
   }
+
   recorder.stop()
-  return new Promise<string>(resolve => {
-    recorder.onstop = () => resolve(URL.createObjectURL(new Blob(chunks, { type: mimeType || 'video/webm' })))
-  })
-}
-
-function drawTextOverlay(ctx: CanvasRenderingContext2D, text: string, W: number, H: number) {
-  const g = ctx.createLinearGradient(0, H * 0.6, 0, H)
-  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.75)')
-  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H)
-  ctx.font = `bold ${W * 0.027}px Inter, system-ui, sans-serif`
-  ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.textAlign = 'center'
-  const maxW = W * 0.8, words = text.split(' '), lines: string[] = []
-  let line = ''
-  for (const w of words) { const t = line ? line + ' ' + w : w; if (ctx.measureText(t).width > maxW && line) { lines.push(line); line = w } else line = t }
-  if (line) lines.push(line)
-  const lineH = W * 0.033, startY = H - 60 - lines.length * lineH
-  lines.forEach((l, i) => ctx.fillText(l, W / 2, startY + i * lineH))
-}
-
-function drawSceneTitle(ctx: CanvasRenderingContext2D, title: string, W: number, H: number, alpha: number) {
-  ctx.save(); ctx.globalAlpha = alpha
-  ctx.fillStyle = 'rgba(124,92,252,0.85)'; ctx.fillRect(0, H * 0.08 - 24, W * 0.6, 48)
-  ctx.font = `bold ${W * 0.025}px Inter, system-ui, sans-serif`; ctx.fillStyle = '#fff'; ctx.textAlign = 'left'
-  ctx.fillText(title, W * 0.025, H * 0.08 + 8); ctx.restore()
+  return done
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {
@@ -696,8 +940,9 @@ onMounted(async () => {
               <Icon name="lucide:sparkles" size="14" />
               {{ generatingAll ? 'Generating…' : 'Generate all' }}
             </button>
-            <button v-if="allImagesReady && !videoUrl" class="btn btn-sm btn-primary" @click="assembleVideo">
-              <Icon name="lucide:film" size="14" /> Render
+            <button v-if="allImagesReady && !videoUrl" class="btn btn-sm btn-primary" :disabled="renderingVideo" @click="assembleVideo">
+              <Icon :name="renderingVideo ? 'lucide:loader' : 'lucide:film'" size="14" :class="{ spin: renderingVideo }" />
+              {{ renderingVideo ? 'Rendering…' : 'Render' }}
             </button>
           </div>
         </header>
