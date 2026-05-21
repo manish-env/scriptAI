@@ -756,11 +756,6 @@ async function generateSceneFrames(index: number) {
   }
 }
 
-/** @deprecated use generateSceneFrames */
-async function generateSceneImage(index: number) {
-  return generateSceneFrames(index)
-}
-
 async function startImagePrediction(body: { model: string; input: Record<string, unknown> }) {
   const res = await $fetch<{ id: string }>('/api/image', { method: 'POST', body })
   return res.id
@@ -1280,11 +1275,11 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
         ctx.restore()
         drawPaperBorder(ctx, W, H)
         drawSceneOverlays(ctx, scene, W, H, f, frames)
-        await waitVideoFrame(stream, FPS)
+        await waitVideoFrame(videoStream, FPS)
       }
       const bookFrames = frames - CROSSFADE_FRAMES
       if (imgs.length >= FRAMES_PER_SCENE) {
-        await renderSceneFlipbook(ctx, scene, imgs, W, H, FPS, bookFrames, stream, CROSSFADE_FRAMES)
+        await renderSceneFlipbook(ctx, scene, imgs, W, H, FPS, bookFrames, videoStream, CROSSFADE_FRAMES)
       } else {
         for (let f = CROSSFADE_FRAMES; f < frames; f++) {
           const localF = f - CROSSFADE_FRAMES
@@ -1293,11 +1288,11 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
           drawSceneFrame(ctx, imgs[0], W, H, progress, motion, wiggle)
           drawPaperBorder(ctx, W, H)
           drawSceneOverlays(ctx, scene, W, H, f, frames)
-          await waitVideoFrame(stream, FPS)
+          await waitVideoFrame(videoStream, FPS)
         }
       }
     } else if (imgs.length >= FRAMES_PER_SCENE) {
-      await renderSceneFlipbook(ctx, scene, imgs, W, H, FPS, frames, stream, 0)
+      await renderSceneFlipbook(ctx, scene, imgs, W, H, FPS, frames, videoStream, 0)
     } else {
       for (let f = 0; f < frames; f++) {
         const progress = easeInOutCubic(f / Math.max(frames - 1, 1))
@@ -1305,7 +1300,7 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
         drawSceneFrame(ctx, imgs[0], W, H, progress, motion, wiggle)
         drawPaperBorder(ctx, W, H)
         drawSceneOverlays(ctx, scene, W, H, f, frames)
-        await waitVideoFrame(stream, FPS)
+        await waitVideoFrame(videoStream, FPS)
       }
     }
   }
