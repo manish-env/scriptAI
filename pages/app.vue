@@ -1214,7 +1214,7 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
       const src = audioCtx.createBufferSource()
       src.buffer = buf
       const slotSec = sceneDurationsSec[i]
-      if (buf.duration > slotSec) src.playbackRate = buf.duration / slotSec
+      if (buf.duration > slotSec) src.playbackRate.value = buf.duration / slotSec
       src.connect(dest)
       src.start(audioCtx.currentTime + t)
       t += sceneDurationsSec[i]
