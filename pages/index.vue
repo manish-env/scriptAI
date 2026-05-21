@@ -41,8 +41,7 @@ onMounted(() => {
     <header class="navbar" id="site-navbar">
       <div class="container nav-inner">
         <NuxtLink to="/" class="nav-logo">
-          <span class="logo-icon">🎬</span>
-          <span>BrandMe <strong>AI</strong></span>
+          <BrandLogo />
         </NuxtLink>
 
         <nav class="nav-links" :class="{ open: navOpen }">
@@ -244,8 +243,7 @@ onMounted(() => {
       <div class="container footer-inner">
         <div class="footer-brand">
           <NuxtLink to="/" class="nav-logo">
-            <span class="logo-icon">🎬</span>
-            <span>BrandMe <strong>AI</strong></span>
+            <BrandLogo />
           </NuxtLink>
           <p>Turn your story into a stunning personal brand video — no camera needed.</p>
         </div>

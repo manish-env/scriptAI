@@ -5,7 +5,11 @@ export default defineNuxtConfig({
     preset: 'cloudflare-pages',
   },
 
-  modules: ['@pinia/nuxt'],
+  modules: ['@pinia/nuxt', '@nuxt/icon'],
+
+  icon: {
+    serverBundle: { collections: ['lucide'] },
+  },
 
   css: ['~/assets/css/main.css'],
 

@@ -411,8 +411,8 @@ onMounted(() => {
     <!-- ── ONBOARD ── -->
     <div v-if="screen === 'onboard'" class="screen onboard-screen">
       <div class="onboard-hero">
-        <NuxtLink to="/" class="back-link">← Back</NuxtLink>
-        <div class="logo-mark">🎬</div>
+        <NuxtLink to="/" class="back-link"><Icon name="lucide:arrow-left" size="14" /> Back</NuxtLink>
+        <BrandLogo :size="52" :wordmark="false" class="logo-mark" />
         <h1>BrandMe <span class="gradient-text">AI</span></h1>
       </div>
       <div class="onboard-form card">
@@ -426,7 +426,7 @@ onMounted(() => {
           <div class="photo-upload" :class="{ 'has-photo': profile.photoUrl }" @click="triggerPhotoUpload">
             <img v-if="profile.photoUrl" :src="profile.photoUrl" class="photo-preview" />
             <div v-else class="photo-placeholder">
-              <span class="upload-icon">📷</span>
+              <Icon name="lucide:camera" size="30" class="upload-icon" />
               <span>Tap to upload photo</span>
             </div>
           </div>
@@ -437,7 +437,7 @@ onMounted(() => {
           <input v-model="profile.niche" type="text" placeholder="e.g. Digital Marketing, Fitness, Finance" />
         </div>
         <button class="btn btn-primary btn-full" :disabled="!canStart" @click="startChat">
-          Start Creating ✨
+          <Icon name="lucide:sparkles" size="16" /> Start Creating
         </button>
       </div>
     </div>
@@ -445,7 +445,7 @@ onMounted(() => {
     <!-- ── CHAT ── -->
     <div v-if="screen === 'chat'" class="screen chat-screen">
       <header class="chat-header">
-        <button class="icon-btn" @click="screen = 'onboard'">←</button>
+        <button class="icon-btn" @click="screen = 'onboard'"><Icon name="lucide:arrow-left" size="18" /></button>
         <div class="chat-header-info">
           <div class="avatar-sm">{{ profile.name[0] }}</div>
           <div>
@@ -453,8 +453,10 @@ onMounted(() => {
             <div class="chat-sub">AI Video Strategist</div>
           </div>
         </div>
-        <button class="icon-btn" title="New video" @click="clearSession">✦</button>
-        <button class="icon-btn" :class="{ active: showVideoPanel }" @click="showVideoPanel = !showVideoPanel">🎬</button>
+        <button class="icon-btn" title="New video" @click="clearSession"><Icon name="lucide:plus" size="18" /></button>
+        <button class="icon-btn" :class="{ active: showVideoPanel }" @click="showVideoPanel = !showVideoPanel">
+          <Icon name="lucide:video" size="18" />
+        </button>
       </header>
 
       <!-- Video panel -->
@@ -462,7 +464,7 @@ onMounted(() => {
         <div v-if="showVideoPanel" class="video-panel">
           <div class="video-panel-inner">
             <div v-if="!videoProject.scenes.length" class="empty-panel">
-              <span>🎞️</span>
+              <Icon name="lucide:film" size="32" />
               <p>Chat about your topic, then say <strong>"create video"</strong> to generate your script.</p>
             </div>
             <div v-else>
@@ -482,7 +484,9 @@ onMounted(() => {
                   </div>
                 </div>
               </div>
-              <button v-if="allImagesReady" class="btn btn-primary btn-full mt-sm" @click="screen = 'preview'">🎬 Assemble Video</button>
+              <button v-if="allImagesReady" class="btn btn-primary btn-full mt-sm" @click="screen = 'preview'">
+                <Icon name="lucide:play" size="15" /> Assemble Video
+              </button>
             </div>
           </div>
         </div>
@@ -495,7 +499,9 @@ onMounted(() => {
             <div class="msg-bubble" :class="msg.role">
               <div class="msg-text" v-html="renderMd(msg.content)" />
               <div v-if="msg.role === 'assistant' && msg.suggestCreate" class="msg-action">
-                <button class="btn btn-sm btn-primary" @click="triggerVideoCreation">Create My Video 🎬</button>
+                <button class="btn btn-sm btn-primary" @click="triggerVideoCreation">
+                  <Icon name="lucide:video" size="14" /> Create My Video
+                </button>
               </div>
             </div>
           </div>
@@ -517,7 +523,8 @@ onMounted(() => {
           @input="autoResize"
         />
         <button class="send-btn" :disabled="!inputText.trim() || aiTyping" @click="sendMessage">
-          {{ aiTyping ? '⏳' : '➤' }}
+          <Icon v-if="aiTyping" name="lucide:loader" size="18" class="spin" />
+          <Icon v-else name="lucide:send" size="18" />
         </button>
       </div>
     </div>
@@ -525,7 +532,7 @@ onMounted(() => {
     <!-- ── PREVIEW ── -->
     <div v-if="screen === 'preview'" class="screen preview-screen">
       <header class="chat-header">
-        <button class="icon-btn" @click="screen = 'chat'">←</button>
+        <button class="icon-btn" @click="screen = 'chat'"><Icon name="lucide:arrow-left" size="18" /></button>
         <div class="chat-header-info">
           <div>
             <div class="chat-title">{{ videoProject.title || 'Your Video' }}</div>
@@ -538,7 +545,9 @@ onMounted(() => {
       <!-- Download bar -->
       <div v-if="videoUrl" class="download-bar">
         <video :src="videoUrl" controls class="video-preview-mini" />
-        <a :href="videoUrl" download="brand-video.webm" class="btn btn-primary btn-full mt-sm">⬇ Download Video</a>
+        <a :href="videoUrl" download="brand-video.webm" class="btn btn-primary btn-full mt-sm">
+          <Icon name="lucide:download" size="16" /> Download Video
+        </a>
       </div>
 
       <div ref="previewContent" class="preview-content">
@@ -554,7 +563,7 @@ onMounted(() => {
                 <div class="spinner" /><span>Generating image…</span>
               </div>
               <div v-else class="scene-img-placeholder" @click="generateSceneImage(i)">
-                <span>🖼️</span><span>Tap to generate</span>
+                <Icon name="lucide:image" size="28" /><span>Tap to generate</span>
               </div>
             </div>
             <div class="scene-script">
@@ -602,7 +611,7 @@ onMounted(() => {
 .onboard-hero { background: linear-gradient(160deg,#1a1030 0%,var(--bg) 60%); padding: 48px 24px 36px; text-align: center; position: relative; }
 .onboard-hero::after { content:''; position:absolute; bottom:-1px; left:0; right:0; height:32px; background:var(--bg); border-radius:50% 50% 0 0/32px 32px 0 0; }
 .back-link { position:absolute; top:16px; left:16px; color:var(--text2); text-decoration:none; font-size:14px; }
-.logo-mark { font-size:52px; margin-bottom:10px; }
+.logo-mark { margin-bottom:10px; }
 .onboard-hero h1 { font-size:30px; font-weight:800; }
 .onboard-form { margin:24px 16px 0; background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:24px; }
 .onboard-form h2 { font-size:18px; font-weight:700; margin-bottom:20px; }
@@ -710,4 +719,5 @@ onMounted(() => {
 @keyframes bounce { 0%,60%,100% { transform:translateY(0); } 30% { transform:translateY(-6px); } }
 @keyframes spin { to { transform:rotate(360deg); } }
 @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+.spin { animation:spin 1s linear infinite; }
 </style>
