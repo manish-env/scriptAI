@@ -5,7 +5,7 @@ pages_build_output_dir = "dist"
 [[d1_databases]]
 binding = "DB"
 database_name = "brandme-db"
-database_id = "REPLACE_WITH_D1_ID"
+database_id = "84f4fa39-cd77-41dd-b3eb-581e1bc808ae"
 
 [[r2_buckets]]
 binding = "BUCKET"
