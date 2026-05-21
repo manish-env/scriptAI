@@ -10,7 +10,7 @@ interface Scene {
   title: string
   narration: string
   imagePrompt: string
-  /** Three pose/visual beats for paper-flip animation (from script JSON). */
+  /** Three flipbook pages per scene — same background, character pose changes (from script JSON). */
   framePrompts?: string[]
   duration: number
   mood: string
@@ -482,15 +482,15 @@ async function callClaude(
 The user is ${profile.name}, working in the ${profile.niche} niche.
 They create personal brand videos WITHOUT showing their face — using illustrated caricature scenes.
 
-VIDEO FORMAT (important):
-- Each video has 4-6 scenes.
-- Each scene becomes ${FRAMES_PER_SCENE} illustrated images (paper-flip): same character, 3 scene-specific pose beats derived from that scene's story.
+VIDEO FORMAT (flipbook style):
+- 4-6 scenes; EACH scene is a different place (office, stage, home, etc.) — backgrounds must change between scenes.
+- Within one scene: ${FRAMES_PER_SCENE} illustrated "pages" — SAME background/environment on every page, only the character's pose changes (like flipping pages in a draw-my-life book).
 
 Your job is to:
-1. Chat naturally; understand their message, audience, and story
-2. Help them craft a compelling video concept in plain language (scene titles + narration summaries)
-3. When they have enough info, suggest they say "create video" or tap Create My Video
-4. Remember: visuals must keep the SAME character look in every scene
+1. Chat naturally; understand message, audience, and story
+2. Outline scenes with distinct locations per scene
+3. When ready, suggest "create video" or Create My Video
+4. Same character face/outfit everywhere; different environment per scene
 
 NEVER output raw JSON, code blocks, or script schemas in chat. The app builds the formal script separately when they create the video.
 
@@ -536,7 +536,7 @@ async function applyVideoScript(scriptJson: VideoScriptJson) {
     generatingLabel: null,
   }))
   aiTyping.value = false
-  const summary = `🎬 **Video script created!** "${scriptJson.title}"\n\nI've written **${scriptJson.scenes.length} scenes** for your video:\n${scriptJson.scenes.map((s: Scene, i: number) => `${i + 1}. **${s.title}** — ${s.narration.slice(0, 60)}…`).join('\n')}\n\nOpen the storyboard and **Generate** — each scene gets **${FRAMES_PER_SCENE} paper-flip frames** (same face, subtle pose changes) for a stop-motion feel. Ready?`
+  const summary = `🎬 **Video script created!** "${scriptJson.title}"\n\n**${scriptJson.scenes.length} scenes** (each in its own setting):\n${scriptJson.scenes.map((s: Scene, i: number) => `${i + 1}. **${s.title}** — ${s.narration.slice(0, 60)}…`).join('\n')}\n\nOpen the storyboard and **Generate** — each scene gets **${FRAMES_PER_SCENE} flipbook pages** (same location, character moves as you flip). Ready?`
   messages.value.push({ role: 'assistant', content: summary, suggestCreate: false })
   scrollToBottom()
   syncScenes(videoProject.scenes.map(s => ({
@@ -559,19 +559,19 @@ async function generateVideoScript() {
 Creator: ${profile.name} (${profile.niche} niche).
 Output: short video script, 60-90 seconds total, 4-6 scenes.
 
-ANIMATION MODEL: Each scene becomes exactly ${FRAMES_PER_SCENE} images of the SAME character (paper-flip). The character's face, hair, skin tone, and outfit must match characterDescription in every frame.
+FLIPBOOK MODEL: Each scene = a different location. Within a scene, exactly ${FRAMES_PER_SCENE} flipbook pages share the SAME background; only the character pose changes page to page. characterDescription is identical in every scene; imagePrompt MUST change the environment every scene.
 
 IMPORTANT: Respond ONLY with valid JSON (no markdown). Schema:
 {
   "title": "Video title",
   "topic": "One sentence topic",
-  "characterDescription": "Fixed look for ${profile.name || 'the creator'} used in ALL scenes and frames: face, hair, skin, outfit, caricature art style — never change",
+  "characterDescription": "Fixed look for ${profile.name || 'the creator'}: face, hair, skin, outfit, caricature style — never change",
   "scenes": [
     {
       "title": "Scene title",
       "narration": "Voiceover, 2-3 sentences",
-      "imagePrompt": "Scene setting, background, props, and what the character is doing — do NOT redefine the face each scene",
-      "framePrompts": ["pose/expression for beat 1", "pose/expression for beat 2", "pose/expression for beat 3"],
+      "imagePrompt": "UNIQUE setting for THIS scene only — specific room/place, background, props, lighting (e.g. busy open-plan office with glass walls). Must differ from other scenes.",
+      "framePrompts": ["page 1 pose", "page 2 pose", "page 3 pose"],
       "duration": 10,
       "mood": "inspiring"
     }
@@ -579,9 +579,10 @@ IMPORTANT: Respond ONLY with valid JSON (no markdown). Schema:
 }
 
 Rules:
-- framePrompts MUST be exactly ${FRAMES_PER_SCENE} strings per scene, written for THAT scene's narration (setup → key moment → payoff). Never use generic copy-paste poses across scenes.
-- imagePrompt = shared environment/action; framePrompts = pose, hands, and expression only (no background).
-- Do not describe different people across scenes.`
+- Every scene MUST have a clearly different imagePrompt location than every other scene in this video.
+- framePrompts: exactly ${FRAMES_PER_SCENE} strings — character pose/expression only for that scene's story (no background words).
+- imagePrompt = environment for all ${FRAMES_PER_SCENE} pages in that scene; never reuse the same room across scenes unless the story requires it.
+- One person only (the creator).`
 
   const msgs = [
     ...buildChatMessagesForScript(),
@@ -601,10 +602,10 @@ function hasValidFramePrompts(scene: Scene) {
 }
 
 async function generateFramePromptsForScene(scene: Scene) {
-  const system = `You write pose-only cues for a ${FRAMES_PER_SCENE}-frame paper-flip animation of one illustrated video scene.
+  const system = `You write flipbook page poses for ONE scene. The background is already fixed in imagePrompt — pages only move the character.
 Respond ONLY with valid JSON: {"framePrompts":["...","...","..."]}
-Exactly ${FRAMES_PER_SCENE} strings. Each string: body pose, hand position, and facial expression only — no background, props, or wardrobe.
-The three beats must follow this scene's narration (opening → emphasis → closing). Make them specific to the story beat, not generic templates.`
+Exactly ${FRAMES_PER_SCENE} strings: body pose, hands, expression only — never mention background, room, or props.
+Progression: page 1 still → page 2 mid-action → page 3 reaction. Match this scene's narration.`
 
   const raw = await callClaude(
     [{ role: 'user', content: JSON.stringify({
@@ -650,16 +651,27 @@ function buildFramePrompt(scene: Scene, poseIndex: number) {
     || `caricature of ${profile.name}, ${profile.niche} creator`
   const poseHint = scene.framePrompts?.[poseIndex]?.trim()
   if (!poseHint) throw new Error('Frame prompts missing for this scene')
+
+  if (poseIndex === 0) {
+    return [
+      char,
+      'Same person as reference portrait — identical face, hair, skin tone, and outfit.',
+      scene.imagePrompt,
+      'Flipbook page 1: full illustration of this exact environment and background for this scene.',
+      `Character pose: ${poseHint}.`,
+      'Storybook illustration on paper, warm colors, 16:9, no plain studio backdrop unless the scene is a studio.',
+    ].join(' ')
+  }
   return [
     char,
-    'Same character as reference image, identical face, hair, skin tone, and outfit.',
-    scene.imagePrompt,
-    `Pose for frame ${poseIndex + 1} of ${FRAMES_PER_SCENE}: ${poseHint}.`,
-    'Paper-cut flat illustration, soft paper texture edge, warm colors, 16:9.',
+    'Flipbook next page: keep the EXACT same background, room, props, lighting, and camera as the reference image.',
+    'Change ONLY the character pose and expression — environment must not change.',
+    `New pose: ${poseHint}.`,
+    'Same illustration style, same scene location.',
   ].join(' ')
 }
 
-// ── Image Generation (hero + 3 paper-flip frames per scene) ─────────────────
+// ── Image Generation (hero + 3 flipbook pages per scene) ────────────────────
 
 async function ensureHeroCaricature() {
   if (profile.heroBase64) return
@@ -713,12 +725,19 @@ async function generateSceneFrames(index: number) {
     }
     scene.generatingLabel = 'Planning poses…'
     await ensureSceneFramePrompts(scene)
+    let scenePageRef: string | null = null
     for (let fi = 0; fi < FRAMES_PER_SCENE; fi++) {
-      scene.generatingLabel = `Frame ${fi + 1}/${FRAMES_PER_SCENE}`
-      const replicateUrl = await callReplicate(buildFramePrompt(scene, fi), { strength: 0.38 })
+      scene.generatingLabel = fi === 0 ? `Page 1/${FRAMES_PER_SCENE} (scene)` : `Page ${fi + 1}/${FRAMES_PER_SCENE} (pose)`
+      const replicateUrl = await callReplicate(
+        buildFramePrompt(scene, fi),
+        fi === 0
+          ? { strength: 0.4 }
+          : { referenceBase64: scenePageRef!, strength: 0.26 },
+      )
       const { assetUrl } = await uploadAsset(replicateUrl, 'scene_image')
       scene.frameUrls.push(assetUrl)
       scene.imageUrl = scene.frameUrls[0]
+      if (fi === 0) scenePageRef = await assetUrlToBase64(assetUrl)
     }
     await persistSceneFrames(scene)
     showToastMsg(`Scene ${index + 1}: ${FRAMES_PER_SCENE} frames ready`)
@@ -735,11 +754,11 @@ async function generateSceneImage(index: number) {
   return generateSceneFrames(index)
 }
 
-async function callReplicate(prompt: string, opts?: { usePhoto?: boolean; strength?: number }) {
+async function callReplicate(prompt: string, opts?: { usePhoto?: boolean; referenceBase64?: string; strength?: number }) {
   const fullPrompt = `${prompt}, caricature illustration style, digital art, vibrant colors, warm professional personal brand, high quality`
   const input: Record<string, unknown> = {
     prompt: fullPrompt,
-    negative_prompt: 'realistic photo, photography, blurry, low quality, different face, different person, nsfw',
+    negative_prompt: 'realistic photo, photography, blurry, low quality, different face, different person, plain white background, generic studio backdrop, nsfw',
     width: 1280,
     height: 720,
     num_outputs: 1,
@@ -747,10 +766,9 @@ async function callReplicate(prompt: string, opts?: { usePhoto?: boolean; streng
     num_inference_steps: 30,
     guidance_scale: 7.5,
   }
-  const ref = opts?.usePhoto
-    ? profile.photoBase64
-    : (profile.heroBase64 || profile.photoBase64)
-  const strength = opts?.strength ?? (profile.heroBase64 ? 0.38 : 0.5)
+  const ref = opts?.referenceBase64
+    ?? (opts?.usePhoto ? profile.photoBase64 : (profile.heroBase64 || profile.photoBase64))
+  const strength = opts?.strength ?? (opts?.referenceBase64 ? 0.26 : (profile.heroBase64 ? 0.38 : 0.5))
   if (ref) {
     input.image = `data:image/jpeg;base64,${ref}`
     input.strength = strength
@@ -779,7 +797,7 @@ const VIDEO_H = 720
 const VIDEO_FPS = 30
 const VIDEO_BITRATE = 10_000_000
 const CROSSFADE_FRAMES = 18
-const FLIP_TRANSITION_FRAMES = 14
+const FLIPBOOK_PAGE_CUT_FRAMES = 2
 const MOTION_PRESETS = ['zoom-in', 'zoom-out', 'pan-left', 'pan-right', 'drift-up'] as const
 type MotionPreset = typeof MOTION_PRESETS[number]
 
@@ -827,36 +845,6 @@ function drawPaperBorder(ctx: CanvasRenderingContext2D, W: number, H: number) {
   ctx.strokeStyle = 'rgba(255,255,255,0.08)'
   ctx.lineWidth = 3
   ctx.strokeRect(10, 10, W - 20, H - 20)
-}
-
-function drawPaperFlipTransition(
-  ctx: CanvasRenderingContext2D,
-  imgA: HTMLImageElement,
-  imgB: HTMLImageElement,
-  blend: number,
-  W: number,
-  H: number,
-  motion: MotionPreset,
-) {
-  ctx.fillStyle = '#f4efe6'
-  ctx.fillRect(0, 0, W, H)
-  if (blend < 0.5) {
-    const t = blend * 2
-    ctx.save()
-    ctx.translate(W / 2, H / 2)
-    ctx.scale(Math.max(0.12, 1 - t * 0.88), 1)
-    ctx.translate(-W / 2, -H / 2)
-    drawSceneFrame(ctx, imgA, W, H, 1, motion, 0)
-    ctx.restore()
-  } else {
-    const t = (blend - 0.5) * 2
-    ctx.save()
-    ctx.translate(W / 2, H / 2)
-    ctx.scale(Math.min(1, t * 0.88 + 0.12), 1)
-    ctx.translate(-W / 2, -H / 2)
-    drawSceneFrame(ctx, imgB, W, H, 0, motion, 0)
-    ctx.restore()
-  }
 }
 
 function drawSceneFrame(
@@ -940,7 +928,8 @@ function sceneFrameUrls(scene: Scene): string[] {
   return []
 }
 
-async function renderScenePaperFlip(
+/** Hold each flipbook page, then quick cut to the next (pose change = motion). */
+async function renderSceneFlipbook(
   ctx: CanvasRenderingContext2D,
   scene: Scene,
   imgs: HTMLImageElement[],
@@ -948,29 +937,25 @@ async function renderScenePaperFlip(
   H: number,
   FPS: number,
   totalFrames: number,
-  motion: MotionPreset,
   stream: MediaStream,
   startGlobalFrame: number,
 ) {
   const n = imgs.length
-  const flips = FLIP_TRANSITION_FRAMES * Math.max(0, n - 1)
-  const holdFrames = Math.max(FPS, Math.floor((totalFrames - flips) / n))
+  const cuts = FLIPBOOK_PAGE_CUT_FRAMES * Math.max(0, n - 1)
+  const holdFrames = Math.max(FPS, Math.floor((totalFrames - cuts) / n))
   let globalF = startGlobalFrame
 
   for (let seg = 0; seg < n; seg++) {
     for (let f = 0; f < holdFrames; f++) {
-      const wiggle = Math.sin(f * 0.14 + seg * 1.2) * 0.016
-      const progress = easeInOutCubic(f / Math.max(holdFrames - 1, 1)) * 0.25 + 0.4
-      drawSceneFrame(ctx, imgs[seg], W, H, progress, motion, wiggle)
+      drawSceneFrame(ctx, imgs[seg], W, H, 0.5, 'zoom-in', 0)
       drawPaperBorder(ctx, W, H)
       drawSceneOverlays(ctx, scene, W, H, globalF, totalFrames)
       globalF++
       await waitVideoFrame(stream, FPS)
     }
     if (seg < n - 1) {
-      for (let f = 0; f < FLIP_TRANSITION_FRAMES; f++) {
-        const blend = easeInOutCubic(f / FLIP_TRANSITION_FRAMES)
-        drawPaperFlipTransition(ctx, imgs[seg], imgs[seg + 1], blend, W, H, motion)
+      for (let f = 0; f < FLIPBOOK_PAGE_CUT_FRAMES; f++) {
+        drawSceneFrame(ctx, imgs[seg + 1], W, H, 0.5, 'zoom-in', 0)
         drawPaperBorder(ctx, W, H)
         drawSceneOverlays(ctx, scene, W, H, globalF, totalFrames)
         globalF++
@@ -1176,9 +1161,9 @@ async function buildVideoFromImages(scenes: Scene[]) {
         drawSceneOverlays(ctx, scene, W, H, f, frames)
         await waitVideoFrame(stream, FPS)
       }
-      const paperFrames = frames - CROSSFADE_FRAMES
+      const bookFrames = frames - CROSSFADE_FRAMES
       if (imgs.length >= FRAMES_PER_SCENE) {
-        await renderScenePaperFlip(ctx, scene, imgs, W, H, FPS, paperFrames, motion, stream, CROSSFADE_FRAMES)
+        await renderSceneFlipbook(ctx, scene, imgs, W, H, FPS, bookFrames, stream, CROSSFADE_FRAMES)
       } else {
         for (let f = CROSSFADE_FRAMES; f < frames; f++) {
           const localF = f - CROSSFADE_FRAMES
@@ -1191,7 +1176,7 @@ async function buildVideoFromImages(scenes: Scene[]) {
         }
       }
     } else if (imgs.length >= FRAMES_PER_SCENE) {
-      await renderScenePaperFlip(ctx, scene, imgs, W, H, FPS, frames, motion, stream, 0)
+      await renderSceneFlipbook(ctx, scene, imgs, W, H, FPS, frames, stream, 0)
     } else {
       for (let f = 0; f < frames; f++) {
         const progress = easeInOutCubic(f / Math.max(frames - 1, 1))
@@ -1511,7 +1496,7 @@ onMounted(async () => {
               @click="generateAllImages"
             >
               <Icon name="lucide:sparkles" size="14" />
-              {{ generatingAll ? 'Generating…' : `Generate all (${FRAMES_PER_SCENE} frames each)` }}
+              {{ generatingAll ? 'Generating…' : `Generate all (${FRAMES_PER_SCENE} pages per scene)` }}
             </button>
             <button v-if="allImagesReady && !videoUrl" class="btn btn-sm btn-primary" :disabled="renderingVideo" @click="assembleVideo">
               <Icon :name="renderingVideo ? 'lucide:loader' : 'lucide:film'" size="14" :class="{ spin: renderingVideo }" />
@@ -1577,7 +1562,7 @@ onMounted(async () => {
                   </div>
                   <div v-else class="frame-placeholder clickable">
                     <Icon name="lucide:layers" size="26" />
-                    <span>Generate {{ FRAMES_PER_SCENE }} frames</span>
+                    <span>Generate {{ FRAMES_PER_SCENE }} pages</span>
                   </div>
                   <span class="frame-duration">{{ scene.duration }}s · {{ scene.frameUrls.length || 0 }}/{{ FRAMES_PER_SCENE }}</span>
                 </div>
@@ -1638,17 +1623,17 @@ onMounted(async () => {
               </div>
             </div>
             <div class="inspector-prompt">
-              <label class="scene-prompt-label">Visual prompt</label>
+              <label class="scene-prompt-label">Scene setting (unique per scene)</label>
               <textarea
                 v-model="videoProject.scenes[selectedSceneIndex].imagePrompt"
                 class="inspector-prompt-input"
                 rows="3"
-                placeholder="Describe the illustration for this scene…"
+                placeholder="Where is this scene? e.g. rooftop at sunset, open-plan office, coffee shop…"
                 @input="onSceneVisualPromptInput(selectedSceneIndex)"
               />
             </div>
             <div v-if="videoProject.scenes[selectedSceneIndex].framePrompts?.length" class="inspector-frames">
-              <label class="scene-prompt-label">Frame poses (AI)</label>
+              <label class="scene-prompt-label">Flipbook poses (same background)</label>
               <ul class="frame-prompt-list">
                 <li
                   v-for="(fp, fi) in videoProject.scenes[selectedSceneIndex].framePrompts"
