@@ -781,14 +781,76 @@ async function callReplicate(prompt: string, opts?: { usePhoto?: boolean; refere
   return pollReplicate(res.id)
 }
 
-async function pollReplicate(id: string, max = 60) {
+async function pollReplicatePrediction(
+  id: string,
+  pollPath: string,
+  failLabel: string,
+  max = 60,
+) {
   for (let i = 0; i < max; i++) {
     await sleep(2000)
-    const data = await $fetch<{ status: string; output: string | string[]; error?: string }>(`/api/image/${id}`)
+    const data = await $fetch<{ status: string; output: string | string[]; error?: string }>(pollPath)
     if (data.status === 'succeeded') return Array.isArray(data.output) ? data.output[0] : data.output
-    if (data.status === 'failed') throw new Error(data.error || 'Image generation failed')
+    if (data.status === 'failed') throw new Error(data.error || failLabel)
   }
-  throw new Error('Image generation timed out')
+  throw new Error(`${failLabel} (timed out)`)
+}
+
+async function pollReplicate(id: string, max = 60) {
+  return pollReplicatePrediction(id, `/api/image/${id}`, 'Image generation failed', max)
+}
+
+// ── Narration (TTS via Replicate) ───────────────────────────────────────────
+async function callTts(text: string) {
+  const res = await $fetch<{ id: string }>('/api/tts', {
+    method: 'POST',
+    body: { text },
+  })
+  return pollReplicatePrediction(res.id, `/api/tts/${res.id}`, 'Voice generation failed', 45)
+}
+
+async function fetchAudioBuffer(ctx: AudioContext, url: string) {
+  const res = await fetch(url.startsWith('http') ? url : `${window.location.origin}${url}`)
+  const data = await res.arrayBuffer()
+  return ctx.decodeAudioData(data.slice(0))
+}
+
+async function generateSceneNarration(scenes: Scene[]) {
+  const ctx = new AudioContext()
+  const buffers: AudioBuffer[] = []
+  try {
+    for (let i = 0; i < scenes.length; i++) {
+      const line = scenes[i].narration?.trim()
+      if (!line) {
+        buffers.push(ctx.createBuffer(1, 1, ctx.sampleRate))
+        continue
+      }
+      showToastMsg(`Voiceover ${i + 1}/${scenes.length}…`)
+      const audioUrl = await callTts(line)
+      buffers.push(await fetchAudioBuffer(ctx, audioUrl))
+    }
+    return buffers
+  } finally {
+    await ctx.close()
+  }
+}
+
+function sceneDurationSeconds(scene: Scene, audioSec: number) {
+  const visual = Math.max(MIN_SCENE_DURATION, scene.duration || 5)
+  if (audioSec <= 0) return visual
+  return Math.max(visual, audioSec + 0.35)
+}
+
+function pickVideoMimeTypeWithAudio() {
+  const candidates = [
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+    'video/mp4',
+  ]
+  return candidates.find(t => MediaRecorder.isTypeSupported(t)) || pickVideoMimeType()
 }
 
 // ── Video Assembly (cinematic compositor) ───────────────────────────────────
@@ -804,11 +866,18 @@ type MotionPreset = typeof MOTION_PRESETS[number]
 async function assembleVideo() {
   if (!allImagesReady.value || renderingVideo.value) return
   renderingVideo.value = true
-  showToastMsg('Rendering cinematic video…')
+  showToastMsg('Generating voiceover…')
   try {
-    const url = await buildVideoFromImages(videoProject.scenes)
+    let narrationBuffers: AudioBuffer[] = []
+    try {
+      narrationBuffers = await generateSceneNarration(videoProject.scenes)
+    } catch (e: unknown) {
+      showToastMsg(`Voiceover skipped: ${(e as Error).message}`, 'error')
+    }
+    showToastMsg('Rendering video…')
+    const url = await buildVideoFromImages(videoProject.scenes, narrationBuffers)
     videoUrl.value = url
-    showToastMsg('Video ready!')
+    showToastMsg(narrationBuffers.length ? 'Video with voiceover ready!' : 'Video ready!')
     nextTick(() => { if (previewContent.value) previewContent.value.scrollTop = 0 })
   } catch (e: unknown) {
     showToastMsg('Assembly failed: ' + (e as Error).message, 'error')
@@ -1104,12 +1173,16 @@ function drawSceneOverlays(
   }
 }
 
-async function buildVideoFromImages(scenes: Scene[]) {
+async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuffer[] = []) {
   const W = VIDEO_W
   const H = VIDEO_H
   const FPS = VIDEO_FPS
   const sceneImages = await Promise.all(
     scenes.map(s => Promise.all(sceneFrameUrls(s).map(url => loadImage(url)))),
+  )
+
+  const sceneDurationsSec = scenes.map((s, i) =>
+    sceneDurationSeconds(s, narrationBuffers[i]?.duration ?? 0),
   )
 
   const canvas = document.createElement('canvas')
@@ -1119,12 +1192,40 @@ async function buildVideoFromImages(scenes: Scene[]) {
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
 
-  const stream = canvas.captureStream(FPS)
-  const mimeType = pickVideoMimeType()
+  const videoStream = canvas.captureStream(FPS)
+  const hasNarration = narrationBuffers.some(b => b.duration > 0.05)
+  let audioCtx: AudioContext | null = null
+  let recorderStream: MediaStream = videoStream
+
+  if (hasNarration) {
+    audioCtx = new AudioContext()
+    await audioCtx.resume()
+    const dest = audioCtx.createMediaStreamDestination()
+    let t = 0
+    for (let i = 0; i < scenes.length; i++) {
+      const buf = narrationBuffers[i]
+      if (!buf || buf.duration < 0.05) {
+        t += sceneDurationsSec[i]
+        continue
+      }
+      const src = audioCtx.createBufferSource()
+      src.buffer = buf
+      src.connect(dest)
+      src.start(audioCtx.currentTime + t)
+      t += sceneDurationsSec[i]
+    }
+    recorderStream = new MediaStream([
+      ...videoStream.getVideoTracks(),
+      ...dest.stream.getAudioTracks(),
+    ])
+  }
+
+  const mimeType = hasNarration ? pickVideoMimeTypeWithAudio() : pickVideoMimeType()
   const chunks: BlobPart[] = []
-  const recorder = new MediaRecorder(stream, {
+  const recorder = new MediaRecorder(recorderStream, {
     mimeType: mimeType || undefined,
     videoBitsPerSecond: VIDEO_BITRATE,
+    audioBitsPerSecond: hasNarration ? 128_000 : undefined,
     bitsPerSecond: VIDEO_BITRATE,
   } as MediaRecorderOptions)
   recorder.ondataavailable = e => {
@@ -1133,18 +1234,20 @@ async function buildVideoFromImages(scenes: Scene[]) {
 
   const done = new Promise<string>((resolve) => {
     recorder.onstop = () => {
+      audioCtx?.close()
       resolve(URL.createObjectURL(new Blob(chunks, { type: mimeType || 'video/webm' })))
     }
   })
 
   recorder.start(100)
+  if (hasNarration && audioCtx) await sleep(80)
 
   for (let si = 0; si < scenes.length; si++) {
     const scene = scenes[si]
     const imgs = sceneImages[si]
     if (!imgs.length) continue
     const motion = MOTION_PRESETS[si % MOTION_PRESETS.length]
-    const frames = Math.max(FPS * 2, Math.floor((scene.duration || 5) * FPS))
+    const frames = Math.max(FPS * 2, Math.floor(sceneDurationsSec[si] * FPS))
 
     if (si > 0 && imgs.length) {
       const prevImgs = sceneImages[si - 1]
@@ -1500,7 +1603,7 @@ onMounted(async () => {
             </button>
             <button v-if="allImagesReady && !videoUrl" class="btn btn-sm btn-primary" :disabled="renderingVideo" @click="assembleVideo">
               <Icon :name="renderingVideo ? 'lucide:loader' : 'lucide:film'" size="14" :class="{ spin: renderingVideo }" />
-              {{ renderingVideo ? 'Rendering…' : 'Render' }}
+              {{ renderingVideo ? 'Rendering…' : 'Render with voiceover' }}
             </button>
           </div>
         </header>
