@@ -1,12 +1,12 @@
-interface Env { ASSETS: R2Bucket }
+interface Env { BUCKET: R2Bucket }
 
 export default defineEventHandler(async (event) => {
   const env = (event.context.cloudflare?.env ?? {}) as Env
   const path = (getRouterParam(event, 'path') as unknown as string[]).join('/')
 
-  if (!env.ASSETS) throw createError({ statusCode: 404 })
+  if (!env.BUCKET) throw createError({ statusCode: 404 })
 
-  const obj = await env.ASSETS.get(path)
+  const obj = await env.BUCKET.get(path)
   if (!obj) throw createError({ statusCode: 404 })
 
   const headers = new Headers()
