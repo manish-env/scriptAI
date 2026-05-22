@@ -4,7 +4,7 @@ export const REPLICATE_MODELS = {
   /** Pose edits, scene placement, and hero stylization — single model for all frames */
   kontext: 'black-forest-labs/flux-kontext-pro',
   /** Image-to-video generation for Video Mode scenes (~5s clips, ~$0.05/run) */
-  videoI2V: 'wan-video/wan2.1-i2v-480p',
+  videoI2V: 'wavespeedai/wan-2.1-i2v-480p',
 } as const
 
 /** Single source of truth for art style — used in every prompt so every frame looks the same */

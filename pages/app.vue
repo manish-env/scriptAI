@@ -1583,8 +1583,9 @@ async function generateSceneActualVideo(index: number) {
       input: {
         image: absoluteUrl,
         prompt: `${scene.narration} ${scene.mood} mood, cinematic motion`,
-        num_frames: 81,  // 81 frames @ 16 fps ≈ 5 seconds
-        fps: 16,
+        aspect_ratio: '16:9',
+        fast_mode: 'Balanced',
+        disable_safety_checker: true,
       },
     })
     const videoClipUrl = await pollReplicatePrediction(id, `/api/image/${id}`, 'Video generation failed', 180)

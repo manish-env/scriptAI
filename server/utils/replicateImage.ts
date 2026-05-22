@@ -25,16 +25,22 @@ export async function createReplicatePrediction(
       body: payload,
     })
   } catch (e: unknown) {
-    const err = e as { statusCode?: number; data?: { detail?: string } }
+    const err = e as { statusCode?: number; data?: { detail?: string; title?: string } }
     if (err.statusCode === 401) {
       throw createError({
         statusCode: 401,
         message: 'Replicate rejected the API key. Check REPLICATE_API_KEY is valid (starts with r8_).',
       })
     }
+    if (err.statusCode === 404) {
+      throw createError({
+        statusCode: 404,
+        message: `Replicate model not found: ${body.model ?? body.version}. Check the model slug is correct.`,
+      })
+    }
     throw createError({
       statusCode: err.statusCode || 502,
-      message: err.data?.detail || 'Replicate image request failed',
+      message: err.data?.detail || err.data?.title || 'Replicate request failed',
     })
   }
 }
