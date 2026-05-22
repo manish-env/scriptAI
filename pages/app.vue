@@ -195,6 +195,9 @@ const sessionId = ref<string | null>(null)
 const toast = reactive({ show: false, message: '', type: 'success' })
 
 const projectSetup = reactive({ videoType: '', projectTitle: '', projectPurpose: '' })
+// Prevents the onboard form from flashing with personal data while init is running.
+// Starts true and is cleared once we know which screen to show.
+const appLoading = ref(true)
 
 const sceneVideoUrls = ref<Record<number, string>>({})
 const sceneVideoLoading = ref(-1)
@@ -1730,80 +1733,91 @@ onMounted(async () => {
   const activeSession = localStorage.getItem('bm_active_session')
   const newProjectRaw = localStorage.getItem('bm_new_project')
 
-  if (!uid) return // stay on onboard
-
-  userId.value = uid
-
-  // Load user profile from D1
-  const user = await $fetch<{ id: string; name: string; niche: string; photo_key: string | null; hero_key?: string | null; eleven_voice_id?: string | null } | null>(
-    `/api/user?id=${uid}`
-  ).catch(() => null)
-
-  if (user?.name) {
-    profile.name = user.name
-    profile.niche = user.niche ?? ''
-    if (user.photo_key) {
-      profile.photoUrl = `/api/assets/${user.photo_key}`
-      try { profile.photoBase64 = await assetUrlToBase64(profile.photoUrl) } catch { /* lazy load */ }
-    }
-    if (user.hero_key) {
-      profile.heroUrl = `/api/assets/${user.hero_key}`
-      try { profile.heroBase64 = await assetUrlToBase64(profile.heroUrl) } catch { /* lazy load */ }
-    }
-    if (user.eleven_voice_id) profile.elevenVoiceId = user.eleven_voice_id
-  }
-
-  if (route.query.setup === 'profile') {
-    navigateTo('/profile')
+  if (!uid) {
+    // No user — show onboard form immediately
+    appLoading.value = false
     return
   }
 
-  // ── New project from modal form ──────────────────────────────────────────
-  if (newProjectRaw) {
-    localStorage.removeItem('bm_new_project')
-    try {
-      const setup = JSON.parse(newProjectRaw) as {
-        videoType: string; title: string; purpose: string; photoBase64: string | null
-      }
-      projectSetup.videoType = setup.videoType
-      projectSetup.projectTitle = setup.title
-      projectSetup.projectPurpose = setup.purpose
-      videoProject.title = setup.title
-      if (setup.photoBase64) {
-        // Project-specific photo always wins — character is built from this image,
-        // not the global profile photo, so each project can have its own look.
-        profile.photoBase64 = setup.photoBase64
-        profile.photoUrl = `data:image/jpeg;base64,${setup.photoBase64}`
-        profile.heroUrl = null
-        profile.heroBase64 = null
-      }
-    } catch { /* ignore parse errors */ }
-    await startNewProjectChat()
-    return
-  }
+  // User exists — keep loading screen up until we know which route to take.
+  // This prevents the onboard form (with the user's name/niche) from flashing
+  // for ~500ms while the profile fetch is in flight.
+  try {
+    userId.value = uid
 
-  // Load existing session if one was set from projects page
-  if (activeSession) {
-    sessionId.value = activeSession
-    const loaded = await loadSession(activeSession)
-    if (loaded && messages.value.length) {
-      screen.value = 'chat'
-      nextTick(scrollToBottom)
+    // Load user profile from D1
+    const user = await $fetch<{ id: string; name: string; niche: string; photo_key: string | null; hero_key?: string | null; eleven_voice_id?: string | null } | null>(
+      `/api/user?id=${uid}`
+    ).catch(() => null)
+
+    if (user?.name) {
+      profile.name = user.name
+      profile.niche = user.niche ?? ''
+      if (user.photo_key) {
+        profile.photoUrl = `/api/assets/${user.photo_key}`
+        try { profile.photoBase64 = await assetUrlToBase64(profile.photoUrl) } catch { /* lazy load */ }
+      }
+      if (user.hero_key) {
+        profile.heroUrl = `/api/assets/${user.hero_key}`
+        try { profile.heroBase64 = await assetUrlToBase64(profile.heroUrl) } catch { /* lazy load */ }
+      }
+      if (user.eleven_voice_id) profile.elevenVoiceId = user.eleven_voice_id
+    }
+
+    if (route.query.setup === 'profile') {
+      navigateTo('/profile')
       return
     }
-  }
 
-  if (user?.name && !user?.niche) {
-    navigateTo('/profile')
-    return
-  }
+    // ── New project from modal form ──────────────────────────────────────────
+    if (newProjectRaw) {
+      localStorage.removeItem('bm_new_project')
+      try {
+        const setup = JSON.parse(newProjectRaw) as {
+          videoType: string; title: string; purpose: string; photoBase64: string | null
+        }
+        projectSetup.videoType = setup.videoType
+        projectSetup.projectTitle = setup.title
+        projectSetup.projectPurpose = setup.purpose
+        videoProject.title = setup.title
+        if (setup.photoBase64) {
+          // Project-specific photo always wins — character is built from this image,
+          // not the global profile photo, so each project can have its own look.
+          profile.photoBase64 = setup.photoBase64
+          profile.photoUrl = `data:image/jpeg;base64,${setup.photoBase64}`
+          profile.heroUrl = null
+          profile.heroBase64 = null
+        }
+      } catch { /* ignore parse errors */ }
+      await startNewProjectChat()
+      return
+    }
 
-  // Profile exists — skip onboard, start a fresh chat
-  if (user?.name && user?.niche) {
-    screen.value = 'chat'
-    const greeting = `Welcome back, ${user.name}! Ready to create another video? Tell me about your next idea.`
-    messages.value = [{ role: 'assistant', content: greeting, suggestCreate: false }]
-    await ensureSession()
+    // Load existing session if one was set from projects page
+    if (activeSession) {
+      sessionId.value = activeSession
+      const loaded = await loadSession(activeSession)
+      if (loaded && messages.value.length) {
+        screen.value = 'chat'
+        nextTick(scrollToBottom)
+        return
+      }
+    }
+
+    if (user?.name && !user?.niche) {
+      navigateTo('/profile')
+      return
+    }
+
+    // Profile exists — skip onboard, start a fresh chat
+    if (user?.name && user?.niche) {
+      screen.value = 'chat'
+      const greeting = `Welcome back, ${user.name}! Ready to create another video? Tell me about your next idea.`
+      messages.value = [{ role: 'assistant', content: greeting, suggestCreate: false }]
+      await ensureSession()
+    }
+  } finally {
+    appLoading.value = false
   }
 })
 </script>
@@ -1811,8 +1825,13 @@ onMounted(async () => {
 <template>
   <div class="app-shell" :class="{ 'has-scenes': videoProject.scenes.length > 0 && screen !== 'onboard' }">
 
+    <!-- ── INIT LOADING (prevents onboard form flashing with user data) ── -->
+    <div v-if="appLoading" class="app-init-loading">
+      <div class="app-init-spinner" />
+    </div>
+
     <!-- ── ONBOARD ── -->
-    <div v-if="screen === 'onboard'" class="screen onboard-screen">
+    <div v-else-if="screen === 'onboard'" class="screen onboard-screen">
       <div class="onboard-hero">
         <NuxtLink to="/profile" class="back-link">
           <Icon name="fa6-solid:arrow-left" size="14" /> Profile
@@ -1838,7 +1857,7 @@ onMounted(async () => {
     </div>
 
     <!-- ── CHAT + PREVIEW (desktop split layout) ── -->
-    <div v-if="screen === 'chat' || screen === 'preview'" class="workspace">
+    <div v-else-if="screen === 'chat' || screen === 'preview'" class="workspace">
 
       <!-- LEFT: Chat panel -->
       <div class="chat-panel" :class="{ 'mobile-hidden': screen === 'preview' }">
@@ -2301,6 +2320,22 @@ onMounted(async () => {
   background: var(--bg);
   display: flex;
   flex-direction: column;
+}
+
+/* ── Init loading (hides onboard flash) ── */
+.app-init-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+.app-init-spinner {
+  width: 32px; height: 32px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
 }
 
 /* ── Onboard ── */
