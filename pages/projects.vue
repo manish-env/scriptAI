@@ -30,14 +30,11 @@ const newPhotoBase64 = ref<string | null>(null)
 const form = reactive({ videoType: '', title: '', purpose: '', mode: 'image' as 'image' | 'video' })
 
 const VIDEO_TYPES = [
-  { value: 'personal-brand',    label: 'Personal Brand Story',        icon: 'fa6-solid:bullseye' },
-  { value: 'educational',       label: 'Educational Tutorial',         icon: 'fa6-solid:book-open' },
-  { value: 'motivational',      label: 'Motivational / Inspirational', icon: 'fa6-solid:fire' },
-  { value: 'product-demo',      label: 'Product Demo',                 icon: 'fa6-solid:bag-shopping' },
-  { value: 'how-to',            label: 'How-To Guide',                 icon: 'fa6-solid:wrench' },
-  { value: 'case-study',        label: 'Case Study / Success Story',   icon: 'fa6-solid:chart-line' },
-  { value: 'thought-leadership',label: 'Thought Leadership',           icon: 'fa6-solid:lightbulb' },
-  { value: 'course-teaser',     label: 'Course / Program Teaser',      icon: 'fa6-solid:graduation-cap' },
+  { value: 'story-telling',    label: 'Story Telling',        icon: 'fa6-solid:book-open' },
+  { value: 'short-movie',      label: 'Short Movie',          icon: 'fa6-solid:clapperboard' },
+  { value: 'promotional',      label: 'Promotional Video',    icon: 'fa6-solid:bullhorn' },
+  { value: 'personal-branding',label: 'Personal Branding',    icon: 'fa6-solid:star' },
+  { value: 'educational',      label: 'Educational Video',    icon: 'fa6-solid:graduation-cap' },
 ]
 
 function openNewProject() {
