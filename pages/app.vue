@@ -550,7 +550,8 @@ async function startChat() {
   }
   screen.value = 'chat'
   messages.value = []
-  const greeting = `Hi ${profile.name}! 👋 I'm your AI brand strategist. I'll help you create a stunning personal brand video in the **${profile.niche}** space — without showing your face on camera.\n\nLet's start: **What's the main message or story you want your audience to take away from this video?**\n\nFeel free to share your ideas, your audience, what transformation you offer — the more you tell me, the better your video will be!`
+  const typeLabel = projectSetup.videoType ? VIDEO_TYPE_CONFIG[projectSetup.videoType]?.label : null
+  const greeting = `I'm your AI video strategist. Let's build your **${typeLabel ?? 'video'}** — "${projectSetup.projectTitle}".\n\nTo write the best script, tell me: **Who is your target audience, and what should they feel or do after watching this video?**`
   messages.value.push({ role: 'assistant', content: greeting, suggestCreate: false })
   await ensureUser()
   await ensureSession()
@@ -617,8 +618,6 @@ async function callClaude(
       ? `You are an expert ${cfg.persona} specializing in faceless illustrated brand videos.`
       : `You are an expert personal brand video strategist specializing in faceless illustrated brand videos.`,
     [
-      profile.name && `Creator: ${profile.name}`,
-      profile.niche && `Niche: ${profile.niche}`,
       activeTitle && `Project: "${activeTitle}"`,
       activeTopic && `Goal: ${activeTopic}`,
       cfg && `Video type: ${cfg.label}`,
@@ -705,7 +704,6 @@ async function generateVideoScript() {
   const activeTitle2 = videoProject.title || projectSetup.projectTitle
   const activePurpose2 = videoProject.topic || projectSetup.projectPurpose
   const system = `You are a professional video script writer for illustrated faceless brand videos.
-Creator: ${profile.name || 'the creator'}${profile.niche ? ` — ${profile.niche}` : ''}.
 ${activeTitle2 ? `Project: "${activeTitle2}"` : ''}${cfg ? `\nVideo type: ${cfg.label}` : ''}${activePurpose2 ? `\nGoal: ${activePurpose2}` : ''}
 You are writing the script ONLY for this specific project. Do not blend content from other projects.
 
@@ -1730,14 +1728,9 @@ function clearSession() {
   videoProject.title = ''; videoProject.topic = ''; videoProject.characterDescription = ''; videoProject.scenes = []
   videoUrl.value = null; showVideoPanel.value = false
 
-  if (profile.name && profile.niche) {
-    screen.value = 'chat'
-    const greeting = `Welcome back, ${profile.name}! Ready to create another brand video? Tell me about your next idea!`
-    messages.value = [{ role: 'assistant', content: greeting, suggestCreate: false }]
-    ensureSession()
-  } else {
-    screen.value = 'onboard'
-  }
+  screen.value = 'chat'
+  messages.value = [{ role: 'assistant', content: 'Welcome back! Ready to create a new video? Tell me about your next idea.', suggestCreate: false }]
+  ensureSession()
 }
 
 // ── Markdown renderer ──────────────────────────────────────────────────────
@@ -1778,15 +1771,14 @@ async function startNewProjectChat() {
   messages.value = []
 
   const cfg = VIDEO_TYPE_CONFIG[projectSetup.videoType]
-  const namePart = profile.name ? `Hi ${profile.name}! ` : ''
   const purposeBlock = projectSetup.projectPurpose
-    ? `\n\nYour goal: *${projectSetup.projectPurpose}*\n`
+    ? `\n\nProject goal: *${projectSetup.projectPurpose}*\n`
     : ''
 
   const greeting = [
-    `${namePart}I'm your AI **${cfg?.label ?? 'video'} creator** — let's make "${projectSetup.projectTitle}" exceptional.`,
+    `I'm your AI **${cfg?.label ?? 'video'} creator** — let's make **"${projectSetup.projectTitle}"** exceptional.`,
     purposeBlock,
-    `I'll ask you a few focused questions to fully understand your story before we build the script.\n\n${cfg?.firstQuestion ?? '**What\'s the core message** you want viewers to take away?'}`,
+    `I'll ask a few focused questions to understand your story before building the script.\n\n${cfg?.firstQuestion ?? '**What\'s the core message** you want viewers to take away?'}`,
   ].join('')
 
   messages.value.push({ role: 'assistant', content: greeting, suggestCreate: false })
