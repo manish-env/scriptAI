@@ -1581,8 +1581,10 @@ async function generateSceneActualVideo(index: number) {
     const id = await startImagePrediction({
       model: REPLICATE_MODELS.videoI2V,
       input: {
+        image: absoluteUrl,
         prompt: `${scene.narration} ${scene.mood} mood, cinematic motion`,
-        first_frame_image: absoluteUrl,
+        num_frames: 81,  // 81 frames @ 16 fps ≈ 5 seconds
+        fps: 16,
       },
     })
     const videoClipUrl = await pollReplicatePrediction(id, `/api/image/${id}`, 'Video generation failed', 180)
