@@ -199,6 +199,9 @@ const projectSetup = reactive({ videoType: '', projectTitle: '', projectPurpose:
 const sceneVideoUrls = ref<Record<number, string>>({})
 const sceneVideoLoading = ref(-1)
 const sceneVideoModal = ref<{ index: number; url: string } | null>(null)
+const savedVideoKey = ref<string | null>(null)
+const savedVideoUrl = computed(() => savedVideoKey.value ? `/api/assets/${savedVideoKey.value}` : null)
+const showGallery = ref(false)
 
 const VIDEO_TYPE_CONFIG: Record<string, { label: string; persona: string; firstQuestion: string }> = {
   'personal-brand': {
@@ -451,6 +454,10 @@ async function loadSession(id: string) {
 
     videoProject.title = data.title ?? ''
     videoProject.topic = data.topic ?? ''
+    // Keep projectSetup in sync so the AI system prompt always reflects this
+    // project, not a stale setup from a previously opened project.
+    if (data.title) projectSetup.projectTitle = data.title
+    if (data.topic) projectSetup.projectPurpose = data.topic
     messages.value = data.messages.map(m => ({
       role: m.role as 'user' | 'assistant',
       content: m.content,
@@ -493,6 +500,8 @@ async function loadSession(id: string) {
       }
     })
     if (videoProject.scenes.length) showVideoPanel.value = true
+    const sessionMeta = data as DbSession & { video_key?: string | null }
+    if (sessionMeta.video_key) savedVideoKey.value = sessionMeta.video_key
     return true
   } catch {
     localStorage.removeItem('bm_active_session')
@@ -571,6 +580,20 @@ async function callClaude(
   opts?: { max_tokens?: number },
 ) {
   const cfg = projectSetup.videoType ? VIDEO_TYPE_CONFIG[projectSetup.videoType] : null
+
+  // Build project-specific context from what's actually in this project right now.
+  // This anchors the AI firmly to the current project so it never bleeds content
+  // from a different project the user may have worked on previously.
+  const activeTitle = videoProject.title || projectSetup.projectTitle
+  const activeTopic = videoProject.topic || projectSetup.projectPurpose
+  const sceneContext = videoProject.scenes.length
+    ? `\nCURRENT STORYBOARD (${videoProject.scenes.length} scenes already created):\n${
+        videoProject.scenes.map((s, i) =>
+          `  Scene ${i + 1} — "${s.title}": ${s.narration.slice(0, 100)}${s.narration.length > 100 ? '…' : ''}`
+        ).join('\n')
+      }\nWhen answering questions, always refer specifically to these scenes and their narration.`
+    : ''
+
   const system = systemOverride || [
     cfg
       ? `You are an expert ${cfg.persona} specializing in faceless illustrated brand videos.`
@@ -578,11 +601,13 @@ async function callClaude(
     [
       profile.name && `Creator: ${profile.name}`,
       profile.niche && `Niche: ${profile.niche}`,
-      projectSetup.projectTitle && `Project: "${projectSetup.projectTitle}"`,
-      projectSetup.projectPurpose && `Goal: ${projectSetup.projectPurpose}`,
+      activeTitle && `Project: "${activeTitle}"`,
+      activeTopic && `Goal: ${activeTopic}`,
       cfg && `Video type: ${cfg.label}`,
     ].filter(Boolean).join(' | '),
     `
+IMPORTANT: You are working EXCLUSIVELY on the project described above. Do not reference, blend, or borrow content from any other project. Every response must relate only to this specific project.
+${sceneContext}
 VIDEO FORMAT: Each scene is a DIFFERENT location (office, stage, outdoors, etc.). Within a scene, ${FRAMES_PER_SCENE} illustrated flipbook pages share the SAME background — only the character's pose changes per page.
 
 YOUR ROLE:
@@ -659,9 +684,12 @@ async function generateVideoScript() {
   if (fromChat) return normalizeScriptScenes(fromChat)
 
   const cfg = projectSetup.videoType ? VIDEO_TYPE_CONFIG[projectSetup.videoType] : null
+  const activeTitle2 = videoProject.title || projectSetup.projectTitle
+  const activePurpose2 = videoProject.topic || projectSetup.projectPurpose
   const system = `You are a professional video script writer for illustrated faceless brand videos.
 Creator: ${profile.name || 'the creator'}${profile.niche ? ` — ${profile.niche}` : ''}.
-${cfg ? `Video type: ${cfg.label}` : ''}${projectSetup.projectPurpose ? `\nGoal: ${projectSetup.projectPurpose}` : ''}
+${activeTitle2 ? `Project: "${activeTitle2}"` : ''}${cfg ? `\nVideo type: ${cfg.label}` : ''}${activePurpose2 ? `\nGoal: ${activePurpose2}` : ''}
+You are writing the script ONLY for this specific project. Do not blend content from other projects.
 
 Based on the conversation and content complexity, decide the best:
 - Number of scenes: 4–8 (choose what best tells this story)
@@ -979,11 +1007,31 @@ async function assembleVideo() {
     videoUrl.value = url
     showToastMsg(narrationBuffers.length ? 'Video with voiceover ready!' : 'Video ready!')
     nextTick(() => { if (previewContent.value) previewContent.value.scrollTop = 0 })
+    // Auto-save to R2 so the video persists on reload
+    saveRenderedVideo(url).catch(() => {})
   } catch (e: unknown) {
     showToastMsg('Assembly failed: ' + (e as Error).message, 'error')
   } finally {
     renderingVideo.value = false
   }
+}
+
+async function saveRenderedVideo(blobUrl: string) {
+  if (!userId.value || !sessionId.value) return
+  const blob = await fetch(blobUrl).then(r => r.blob())
+  const base64 = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = reject
+    reader.readAsDataURL(blob)
+  })
+  const res = await $fetch<{ key: string; assetUrl: string }>('/api/upload', {
+    method: 'POST',
+    body: { base64, type: 'video', user_id: userId.value, session_id: sessionId.value },
+  })
+  savedVideoKey.value = res.key
+  await dbPatch(`/api/sessions/${sessionId.value}`, { video_key: res.key })
+  showToastMsg('Video saved to cloud')
 }
 
 function easeInOutCubic(t: number) {
@@ -1014,10 +1062,13 @@ async function waitVideoFrame(stream: MediaStream, fps: number, frameStartMs = p
   await new Promise<void>(r => setTimeout(r, remaining))
 }
 
-function drawPaperBorder(ctx: CanvasRenderingContext2D, W: number, H: number) {
-  ctx.strokeStyle = 'rgba(255,255,255,0.08)'
-  ctx.lineWidth = 3
-  ctx.strokeRect(10, 10, W - 20, H - 20)
+const LETTERBOX_RATIO = 0.055  // 5.5% each side — classic 2.35:1 cinematic crop
+
+function drawLetterbox(ctx: CanvasRenderingContext2D, W: number, H: number) {
+  const barH = Math.round(H * LETTERBOX_RATIO)
+  ctx.fillStyle = '#000000'
+  ctx.fillRect(0, 0, W, barH)
+  ctx.fillRect(0, H - barH, W, barH)
 }
 
 function drawSceneFrame(
@@ -1099,7 +1150,7 @@ async function renderSceneFlipbook(
       const t0 = performance.now()
       const p = easeInOutCubic(f / Math.max(holdPerPage - 1, 1))
       drawSceneFrame(ctx, imgs[seg], W, H, p, motion)
-      drawPaperBorder(ctx, W, H)
+      drawLetterbox(ctx, W, H)
       drawSceneOverlays(ctx, scene, W, H, globalF, totalFrames)
       globalF++
       await waitVideoFrame(stream, FPS, t0)
@@ -1116,7 +1167,7 @@ async function renderSceneFlipbook(
         ctx.globalAlpha = blend
         drawSceneFrame(ctx, imgs[seg + 1], W, H, 0, nextMotion)
         ctx.restore()
-        drawPaperBorder(ctx, W, H)
+        drawLetterbox(ctx, W, H)
         drawSceneOverlays(ctx, scene, W, H, globalF, totalFrames)
         globalF++
         await waitVideoFrame(stream, FPS, t0)
@@ -1187,40 +1238,51 @@ function drawCaptionOverlay(
   reveal: number,
 ) {
   if (reveal <= 0) return
-  const fontSize = Math.round(W * 0.028)
+  const fontSize = Math.round(W * 0.030)
   ctx.font = `600 ${fontSize}px Inter, system-ui, sans-serif`
-  const maxW = W * 0.78
-  const lines = wrapText(ctx, text, maxW)
-  const lineH = fontSize * 1.38
-  const padX = 22
-  const padY = 14
-  const blockH = lines.length * lineH + padY * 2
+  const maxW = W * 0.80
+
+  // Word-by-word typewriter: show words progressively based on reveal
+  const words = text.split(' ')
+  const visibleWordCount = Math.min(words.length, Math.ceil(reveal * words.length * 1.1))
+  const visibleText = words.slice(0, visibleWordCount).join(' ')
+
+  // Use full text for stable background width so it doesn't jump as words appear
+  const allLines = wrapText(ctx, text, maxW)
+  const visibleLines = wrapText(ctx, visibleText, maxW)
+
+  const lineH = fontSize * 1.45
+  const padX = 26
+  const padY = 16
   const blockW = Math.min(
     maxW + padX * 2,
-    Math.max(...lines.map(l => ctx.measureText(l).width), 0) + padX * 2,
+    Math.max(...allLines.map(l => ctx.measureText(l).width), 0) + padX * 2,
   )
+  const blockH = allLines.length * lineH + padY * 2
   const blockX = (W - blockW) / 2
-  const blockY = H - blockH - H * 0.07
+  // Position above the letterbox bar with a small gap
+  const barH = Math.round(H * LETTERBOX_RATIO)
+  const blockY = H - blockH - barH - Math.round(H * 0.025)
+
+  // Quick fade-in (first 15% of reveal), then full opacity
+  const fade = easeOutCubic(Math.min(1, reveal * 7))
 
   ctx.save()
-  ctx.globalAlpha = easeOutCubic(Math.min(1, reveal)) * 0.96
-  ctx.fillStyle = 'rgba(8,8,12,0.72)'
-  roundRect(ctx, blockX, blockY, blockW, blockH, 10)
+  ctx.globalAlpha = fade * 0.97
+  // Dark semi-transparent pill background
+  ctx.fillStyle = 'rgba(6,6,10,0.82)'
+  roundRect(ctx, blockX, blockY, blockW, blockH, 12)
   ctx.fill()
-  ctx.strokeStyle = 'rgba(255,255,255,0.12)'
-  ctx.lineWidth = 1
-  roundRect(ctx, blockX, blockY, blockW, blockH, 10)
-  ctx.stroke()
+  // Left accent bar
+  ctx.fillStyle = 'rgba(124,92,252,0.9)'
+  ctx.fillRect(blockX, blockY + 10, 3, blockH - 20)
 
   ctx.fillStyle = '#ffffff'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'top'
-  ctx.shadowColor = 'rgba(0,0,0,0.5)'
-  ctx.shadowBlur = 6
-  const visibleLines = Math.ceil(lines.length * Math.min(1, reveal * 1.15))
-  lines.slice(0, visibleLines).forEach((l, i) => {
-    const lineAlpha = Math.min(1, (reveal * lines.length - i) * 1.4)
-    ctx.globalAlpha = easeOutCubic(lineAlpha) * 0.96
+  ctx.shadowColor = 'rgba(0,0,0,0.65)'
+  ctx.shadowBlur = 8
+  visibleLines.forEach((l, i) => {
     ctx.fillText(l, W / 2, blockY + padY + i * lineH)
   })
   ctx.restore()
@@ -1348,8 +1410,11 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
     const imgs = sceneImages[si]
     if (!imgs.length) continue
     const motion = MOTION_PRESETS[si % MOTION_PRESETS.length]
-    const totalFrames = Math.max(FPS * 2, Math.floor(sceneDurationsSec[si] * FPS))
     const hasCrossfade = si > 0
+    // Add CROSSFADE_FRAMES as additive overhead for non-first scenes so the crossfade
+    // transition does NOT eat into the narration budget. Without this, each scene after
+    // the first loses 0.8s of content time, causing audio to bleed into the next scene.
+    const totalFrames = Math.max(FPS * 2, Math.floor(sceneDurationsSec[si] * FPS) + (hasCrossfade ? CROSSFADE_FRAMES : 0))
 
     // Crossfade transition from previous scene (audio NOT fired yet)
     if (hasCrossfade) {
@@ -1364,7 +1429,7 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
         ctx.globalAlpha = blend
         drawSceneFrame(ctx, imgs[0], W, H, 0, motion)
         ctx.restore()
-        drawPaperBorder(ctx, W, H)
+        drawLetterbox(ctx, W, H)
         drawSceneOverlays(ctx, scene, W, H, f, totalFrames)
         await waitVideoFrame(videoStream, FPS, t0)
       }
@@ -1386,7 +1451,7 @@ async function buildVideoFromImages(scenes: Scene[], narrationBuffers: AudioBuff
         const localF = f - startF
         const progress = easeInOutCubic(localF / Math.max(contentFrames - 1, 1))
         drawSceneFrame(ctx, imgs[0], W, H, progress, motion)
-        drawPaperBorder(ctx, W, H)
+        drawLetterbox(ctx, W, H)
         drawSceneOverlays(ctx, scene, W, H, f, totalFrames)
         await waitVideoFrame(videoStream, FPS, t0)
       }
@@ -1411,6 +1476,7 @@ async function clearProjectMedia() {
   try {
     await $fetch(`/api/sessions/${sessionId.value}/clear-media`, { method: 'POST' })
     videoUrl.value = null
+    savedVideoKey.value = null
     for (const s of videoProject.scenes) {
       s.imageUrl = null
       s.frameUrls = []
@@ -1920,9 +1986,17 @@ onMounted(async () => {
               <Icon name="fa6-solid:wand-magic-sparkles" size="14" />
               {{ generatingAll ? 'Generating…' : `Generate all (${FRAMES_PER_SCENE} pages per scene)` }}
             </button>
-            <button v-if="allImagesReady && !videoUrl" class="btn btn-sm btn-primary" :disabled="renderingVideo" @click="assembleVideo">
-              <Icon :name="renderingVideo ? 'fa6-solid:spinner' : 'fa6-solid:film'" size="14" :class="{ spin: renderingVideo }" />
-              {{ renderingVideo ? 'Rendering…' : 'Render with voiceover' }}
+            <button
+              v-if="videoProject.scenes.some(s => s.frameUrls.length > 0)"
+              class="btn btn-sm btn-ghost"
+              :class="{ active: showGallery }"
+              @click="showGallery = !showGallery"
+            >
+              <Icon name="fa6-solid:images" size="14" /> Gallery
+            </button>
+            <button v-if="allImagesReady" class="btn btn-sm btn-primary" :disabled="renderingVideo" @click="assembleVideo">
+              <Icon :name="renderingVideo ? 'fa6-solid:spinner' : (videoUrl || savedVideoUrl) ? 'fa6-solid:rotate' : 'fa6-solid:film'" size="14" :class="{ spin: renderingVideo }" />
+              {{ renderingVideo ? 'Rendering…' : (videoUrl || savedVideoUrl) ? 'Re-render' : 'Render with voiceover' }}
             </button>
           </div>
         </header>
@@ -1973,12 +2047,63 @@ onMounted(async () => {
           </div>
         </Transition>
 
-        <div v-if="videoUrl" class="download-bar">
-          <video :src="videoUrl" controls class="video-preview-mini" />
-          <a :href="videoUrl" download="brand-video.webm" class="btn btn-primary btn-full mt-sm">
-            <Icon name="fa6-solid:download" size="16" /> Download Video
-          </a>
+        <!-- ── Saved / Rendered Video Bar ── -->
+        <div v-if="videoUrl || savedVideoUrl" class="video-bar">
+          <div class="video-bar-player">
+            <video :src="videoUrl || savedVideoUrl!" controls class="video-preview-mini" />
+            <div v-if="savedVideoKey" class="video-cloud-badge">
+              <Icon name="fa6-solid:cloud-arrow-up" size="11" /> Saved to cloud
+            </div>
+          </div>
+          <div class="video-bar-actions">
+            <a :href="videoUrl || savedVideoUrl!" download="brand-video.webm" class="btn btn-outline btn-sm">
+              <Icon name="fa6-solid:download" size="13" /> Download
+            </a>
+            <button class="btn btn-outline btn-sm" @click="showGallery = !showGallery">
+              <Icon name="fa6-solid:images" size="13" /> {{ showGallery ? 'Hide gallery' : 'Gallery' }}
+            </button>
+          </div>
         </div>
+
+        <!-- ── Project Gallery ── -->
+        <Transition name="slide-down">
+          <div v-if="showGallery" class="gallery-panel">
+            <div class="gallery-panel-header">
+              <Icon name="fa6-solid:images" size="14" class="gallery-icon" />
+              <span>Project Media</span>
+              <span class="gallery-count">{{ videoProject.scenes.reduce((n, s) => n + s.frameUrls.length, 0) }} images{{ savedVideoUrl ? ' · 1 video' : '' }}</span>
+              <button class="icon-btn" style="margin-left:auto" @click="showGallery = false"><Icon name="fa6-solid:xmark" size="14" /></button>
+            </div>
+
+            <!-- Saved video card -->
+            <div v-if="savedVideoUrl" class="gallery-video-row">
+              <div class="gallery-video-card">
+                <video :src="savedVideoUrl" controls class="gallery-video" />
+                <div class="gallery-video-meta">
+                  <span class="gallery-video-title">{{ videoProject.title || 'Rendered Video' }}</span>
+                  <a :href="savedVideoUrl" download="brand-video.webm" class="btn btn-sm btn-primary">
+                    <Icon name="fa6-solid:download" size="12" /> Download
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            <!-- Scene images grid -->
+            <div class="gallery-grid">
+              <template v-for="(scene, si) in videoProject.scenes" :key="si">
+                <div
+                  v-for="(url, fi) in scene.frameUrls"
+                  :key="`${si}-${fi}`"
+                  class="gallery-img-cell"
+                  :title="`Scene ${si + 1} · ${scene.title} · Frame ${fi + 1}`"
+                >
+                  <img :src="url" class="gallery-img" :alt="`Scene ${si + 1} frame ${fi + 1}`" />
+                  <div class="gallery-img-label">S{{ si + 1 }} · F{{ fi + 1 }}</div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </Transition>
 
         <div v-if="!videoProject.scenes.length" class="preview-empty">
           <div class="preview-empty-icon"><Icon name="fa6-solid:film" size="36" /></div>
@@ -2372,8 +2497,72 @@ onMounted(async () => {
 .toolbar-titles { min-width: 0; }
 .toolbar-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
-.download-bar { flex-shrink: 0; padding: 12px 16px; background: var(--bg2); border-bottom: 1px solid var(--border); }
-.video-preview-mini { width: 100%; border-radius: var(--radius-sm); display: block; max-height: 200px; background: #000; }
+/* ── Video bar ── */
+.video-bar { flex-shrink: 0; background: var(--bg2); border-bottom: 1px solid var(--border); }
+.video-bar-player { position: relative; }
+.video-preview-mini { width: 100%; display: block; max-height: 220px; background: #000; object-fit: contain; }
+.video-cloud-badge {
+  position: absolute; bottom: 8px; right: 10px;
+  background: rgba(0,0,0,0.72); backdrop-filter: blur(4px);
+  border: 1px solid rgba(124,92,252,0.4);
+  color: rgba(124,92,252,0.95); font-size: 11px; font-weight: 600;
+  padding: 3px 8px; border-radius: 20px;
+  display: flex; align-items: center; gap: 5px;
+}
+.video-bar-actions {
+  display: flex; gap: 8px; padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+
+/* ── Gallery panel ── */
+.gallery-panel {
+  flex-shrink: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  max-height: 420px;
+  overflow-y: auto;
+}
+.gallery-panel-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px;
+  font-size: 13px; font-weight: 600;
+  background: var(--bg2); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 2;
+}
+.gallery-icon { color: var(--accent); }
+.gallery-count { font-size: 11px; color: var(--text2); font-weight: 400; }
+.gallery-video-row { padding: 12px 14px 0; }
+.gallery-video-card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.gallery-video { width: 100%; max-height: 180px; display: block; background: #000; }
+.gallery-video-meta {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; gap: 8px;
+}
+.gallery-video-title { font-size: 13px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 6px;
+  padding: 12px 14px;
+}
+.gallery-img-cell {
+  position: relative;
+  aspect-ratio: 16/9;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  cursor: zoom-in;
+  transition: border-color 0.15s;
+}
+.gallery-img-cell:hover { border-color: var(--accent); }
+.gallery-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gallery-img-label {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: rgba(0,0,0,0.65); color: rgba(255,255,255,0.75);
+  font-size: 9px; font-weight: 600; text-align: center; padding: 2px;
+  letter-spacing: 0.3px;
+}
 .mt-sm { margin-top: 12px; }
 
 /* Storyboard workspace */

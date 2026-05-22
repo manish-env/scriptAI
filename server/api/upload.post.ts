@@ -19,12 +19,18 @@ export default defineEventHandler(async (event) => {
   let body: ReadableStream | ArrayBuffer | Uint8Array
 
   if (base64) {
-    const raw = base64.includes(',') ? base64.split(',')[1] : base64
+    let raw = base64
+    if (base64.includes(',')) {
+      const commaIdx = base64.indexOf(',')
+      const prefix = base64.slice(0, commaIdx)
+      raw = base64.slice(commaIdx + 1)
+      const mimeMatch = prefix.match(/data:([^;]+);/)
+      if (mimeMatch) contentType = mimeMatch[1]
+    }
     const binary = atob(raw)
     const bytes = new Uint8Array(binary.length)
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
     body = bytes
-    contentType = 'image/jpeg'
   } else {
     const remote = await fetch(url!)
     if (!remote.ok) throw createError({ statusCode: 502, message: 'could not fetch remote asset' })

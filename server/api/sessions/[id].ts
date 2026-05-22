@@ -22,10 +22,19 @@ export default defineEventHandler(async (event) => {
   }
 
   if (event.method === 'PATCH') {
-    const { title, topic } = await readBody(event)
-    if (env.DB) await env.DB.prepare(
-      `UPDATE sessions SET title = ?, topic = ?, updated_at = datetime('now') WHERE id = ?`,
-    ).bind(title ?? null, topic ?? null, id).run()
+    const body = await readBody(event)
+    if (env.DB) {
+      // video_key is updated independently so saving a video never overwrites title/topic
+      if ('video_key' in body) {
+        await env.DB.prepare(
+          `UPDATE sessions SET video_key = ?, updated_at = datetime('now') WHERE id = ?`,
+        ).bind(body.video_key ?? null, id).run()
+      } else {
+        await env.DB.prepare(
+          `UPDATE sessions SET title = ?, topic = ?, updated_at = datetime('now') WHERE id = ?`,
+        ).bind(body.title ?? null, body.topic ?? null, id).run()
+      }
+    }
     return { ok: true }
   }
 })
