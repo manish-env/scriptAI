@@ -897,7 +897,7 @@ async function generateSceneFrames(index: number) {
   }
 }
 
-async function startImagePrediction(body: { model: string; input: Record<string, unknown> }) {
+async function startImagePrediction(body: { model?: string; version?: string; input: Record<string, unknown> }) {
   const res = await $fetch<{ id: string }>('/api/image', { method: 'POST', body })
   return res.id
 }
