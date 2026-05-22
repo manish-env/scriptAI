@@ -206,6 +206,7 @@ const sceneVideoModal = ref<{ index: number; url: string } | null>(null)
 const savedVideoKey = ref<string | null>(null)
 const savedVideoUrl = computed(() => savedVideoKey.value ? `/api/assets/${savedVideoKey.value}` : null)
 const showGallery = ref(false)
+const galleryPreview = ref<string | null>(null)
 
 const VIDEO_TYPE_CONFIG: Record<string, { label: string; persona: string; firstQuestion: string }> = {
   'personal-brand': {
@@ -938,7 +939,7 @@ async function runKontextEdit(
     input: {
       prompt,
       input_image: imageDataUri(imageBase64, mime),
-      aspect_ratio: '16:9',
+      aspect_ratio: '9:16',
       output_format: 'png',
       safety_tolerance: 2,
     },
@@ -2160,11 +2161,15 @@ onMounted(async () => {
             <div class="gallery-panel-header">
               <Icon name="fa6-solid:images" size="14" class="gallery-icon" />
               <span>Project Media</span>
-              <span class="gallery-count">{{ videoProject.scenes.reduce((n, s) => n + s.frameUrls.length, 0) }} images{{ savedVideoUrl ? ' · 1 video' : '' }}</span>
+              <span class="gallery-count">
+                {{ videoProject.scenes.reduce((n, s) => n + s.frameUrls.length, 0) }} images
+                · {{ Object.keys(sceneVideoUrls).length }} clips
+                {{ savedVideoUrl ? '· 1 final video' : '' }}
+              </span>
               <button class="icon-btn" style="margin-left:auto" @click="showGallery = false"><Icon name="fa6-solid:xmark" size="14" /></button>
             </div>
 
-            <!-- Saved video card -->
+            <!-- Saved final video card -->
             <div v-if="savedVideoUrl" class="gallery-video-row">
               <div class="gallery-video-card">
                 <video :src="savedVideoUrl" controls class="gallery-video" />
@@ -2177,7 +2182,29 @@ onMounted(async () => {
               </div>
             </div>
 
+            <!-- Per-scene AI video clips -->
+            <div v-if="Object.keys(sceneVideoUrls).length" class="gallery-video-row">
+              <div class="gallery-clips-label">AI Video Clips</div>
+              <div class="gallery-clips-grid">
+                <div
+                  v-for="(url, idx) in sceneVideoUrls"
+                  :key="idx"
+                  class="gallery-clip-cell"
+                  @click="sceneVideoModal = { index: Number(idx), url }"
+                >
+                  <video :src="url" muted class="gallery-clip-thumb" />
+                  <div class="gallery-img-label">
+                    <Icon name="fa6-solid:play" size="9" />
+                    Scene {{ Number(idx) + 1 }}
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <!-- Scene images grid -->
+            <div v-if="videoProject.scenes.some(s => s.frameUrls.length)" class="gallery-video-row">
+              <div class="gallery-clips-label">Generated Images</div>
+            </div>
             <div class="gallery-grid">
               <template v-for="(scene, si) in videoProject.scenes" :key="si">
                 <div
@@ -2185,11 +2212,30 @@ onMounted(async () => {
                   :key="`${si}-${fi}`"
                   class="gallery-img-cell"
                   :title="`Scene ${si + 1} · ${scene.title} · Frame ${fi + 1}`"
+                  @click="galleryPreview = url"
                 >
                   <img :src="url" class="gallery-img" :alt="`Scene ${si + 1} frame ${fi + 1}`" />
                   <div class="gallery-img-label">S{{ si + 1 }} · F{{ fi + 1 }}</div>
                 </div>
               </template>
+            </div>
+          </div>
+        </Transition>
+
+        <!-- Gallery image fullscreen -->
+        <Transition name="fade">
+          <div v-if="galleryPreview" class="scene-modal-overlay" @click.self="galleryPreview = null">
+            <div class="scene-modal-box" style="max-width:480px">
+              <div class="scene-modal-head">
+                <span>Preview</span>
+                <button class="icon-btn" @click="galleryPreview = null"><Icon name="fa6-solid:xmark" size="16" /></button>
+              </div>
+              <img :src="galleryPreview" style="width:100%;border-radius:0 0 var(--radius) var(--radius);display:block" />
+              <div style="padding:10px 14px;display:flex;justify-content:flex-end">
+                <a :href="galleryPreview" download class="btn btn-sm btn-primary">
+                  <Icon name="fa6-solid:download" size="12" /> Download
+                </a>
+              </div>
             </div>
           </div>
         </Transition>
@@ -2666,9 +2712,28 @@ onMounted(async () => {
   gap: 6px;
   padding: 12px 14px;
 }
+.gallery-clips-label { padding: 10px 14px 4px; font-size: 11px; font-weight: 600; color: var(--text2); letter-spacing: 0.5px; text-transform: uppercase; }
+.gallery-clips-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 6px;
+  padding: 0 14px 12px;
+}
+.gallery-clip-cell {
+  position: relative;
+  aspect-ratio: 9/16;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.gallery-clip-cell:hover { border-color: var(--accent); }
+.gallery-clip-thumb { width: 100%; height: 100%; object-fit: cover; display: block; }
 .gallery-img-cell {
   position: relative;
-  aspect-ratio: 16/9;
+  aspect-ratio: 9/16;
   border-radius: 6px;
   overflow: hidden;
   background: var(--bg3);

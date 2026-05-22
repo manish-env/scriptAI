@@ -25,7 +25,7 @@ export function buildHeroPrompt(name: string, niche: string, characterDescriptio
     'Convert this person into that illustration style while preserving their exact identity.',
     characterDescription || `Professional ${niche} expert, ${name}.`,
     'Keep exact face structure, skin tone, hair color, eye shape — realistic proportions, no exaggeration.',
-    'Head and shoulders portrait, soft studio lighting, clean gradient background, 16:9.',
+    'Head and shoulders portrait, soft studio lighting, clean gradient background, 9:16 vertical.',
   ].join(' ')
 }
 
@@ -40,7 +40,7 @@ export function buildSceneEstablishPromptKontext(
     `Scene: ${imagePrompt}. Rich detailed background with realistic depth, props and lighting.`,
     `Character (keep identical — same face, skin tone, hair, outfit): ${characterDescription}`,
     `Pose: ${pose}. Expression and mood: ${mood}. Realistic body proportions.`,
-    'Full environment clearly visible. Cinematic 16:9 wide framing. Character interacts naturally with the environment.',
+    'Full environment clearly visible. Vertical 9:16 portrait framing for mobile reels. Character interacts naturally with the environment.',
   ].join(' ')
 }
 
