@@ -3,8 +3,8 @@
 export const REPLICATE_MODELS = {
   /** Pose edits, scene placement, and hero stylization — single model for all frames */
   kontext: 'black-forest-labs/flux-kontext-pro',
-  /** Image-to-video generation for Video Mode scenes (~5s clips) — version hash required */
-  videoI2VVersion: 'e2870aa4965fd9ddfd87c16a3c8ab952c18e745e63f3f3b123c2dc8b538ad2b5',
+  /** Stable Video Diffusion XT — ~$0.003-0.015/run, 25 frames @ 5fps ≈ 5s */
+  videoI2VVersion: '3f0457e4619daac51203dedb472816fd4af51f3149fa7a9e0b5ffcf1b8172438',
 } as const
 
 /** Single source of truth for art style — used in every prompt so every frame looks the same */

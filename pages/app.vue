@@ -265,9 +265,11 @@ const timelineTrackRef = ref<HTMLElement | null>(null)
 
 const MIN_SCENE_DURATION = 2
 const MAX_SCENE_DURATION = 10
+const MAX_SCENE_DURATION_VIDEO = 6
 
 function clampSceneDuration(seconds: number) {
-  return Math.round(Math.max(MIN_SCENE_DURATION, Math.min(MAX_SCENE_DURATION, seconds || MAX_SCENE_DURATION)))
+  const max = projectMode.value === 'video' ? MAX_SCENE_DURATION_VIDEO : MAX_SCENE_DURATION
+  return Math.round(Math.max(MIN_SCENE_DURATION, Math.min(max, seconds || max)))
 }
 
 function timelineWidth(scene: Scene) {
@@ -1581,11 +1583,11 @@ async function generateSceneActualVideo(index: number) {
     const id = await startImagePrediction({
       version: REPLICATE_MODELS.videoI2VVersion,
       input: {
-        image: absoluteUrl,
-        prompt: `${scene.narration} ${scene.mood} mood, cinematic motion`,
-        aspect_ratio: '16:9',
-        fast_mode: 'Balanced',
-        disable_safety_checker: true,
+        input_image: absoluteUrl,
+        video_length: '25_frames_with_svd_xt',
+        frames_per_second: 5,
+        motion_bucket_id: 100,
+        sizing_strategy: 'maintain_aspect_ratio',
       },
     })
     const videoClipUrl = await pollReplicatePrediction(id, `/api/image/${id}`, 'Video generation failed', 180)
@@ -2328,7 +2330,7 @@ onMounted(async () => {
                   type="range"
                   class="duration-slider"
                   :min="MIN_SCENE_DURATION"
-                  :max="MAX_SCENE_DURATION"
+                  :max="projectMode === 'video' ? MAX_SCENE_DURATION_VIDEO : MAX_SCENE_DURATION"
                   :value="videoProject.scenes[selectedSceneIndex].duration"
                   @input="setSceneDuration(selectedSceneIndex, Number(($event.target as HTMLInputElement).value))"
                 />
