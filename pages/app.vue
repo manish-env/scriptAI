@@ -253,8 +253,8 @@ const VIDEO_TYPE_CONFIG: Record<string, { label: string; persona: string; firstQ
 // ── Computed ───────────────────────────────────────────────────────────────
 const canStart = computed(() => profile.name.trim() && profile.niche.trim())
 const FRAMES_PER_SCENE = 3
-// In video mode only 2 images per scene (first + last pose); image mode uses all 3
-const neededImages = computed(() => projectMode.value === 'video' ? 2 : FRAMES_PER_SCENE)
+// In video mode only 1 image per scene (SVD takes a single input frame); image mode uses all 3
+const neededImages = computed(() => projectMode.value === 'video' ? 1 : FRAMES_PER_SCENE)
 const allImagesReady = computed(() =>
   videoProject.scenes.length > 0
   && videoProject.scenes.every(s => s.frameUrls.length >= neededImages.value || !!s.imageUrl),
@@ -404,7 +404,7 @@ async function syncScenes(scenes: Scene[]) {
   dbPatch(`/api/sessions/${sessionId.value}`, { title: videoProject.title, topic: videoProject.topic })
 }
 
-async function uploadAsset(replicateUrl: string, type: 'hero' | 'scene_image' | 'photo') {
+async function uploadAsset(replicateUrl: string, type: 'hero' | 'scene_image' | 'photo' | 'video') {
   if (!userId.value) return { assetUrl: replicateUrl, key: null as string | null }
   try {
     const res = await $fetch<{ assetUrl: string; key: string | null }>('/api/upload', {
@@ -512,6 +512,13 @@ async function loadSession(id: string) {
     if (videoProject.scenes.length) showVideoPanel.value = true
     const sessionMeta = data as DbSession & { video_key?: string | null }
     if (sessionMeta.video_key) savedVideoKey.value = sessionMeta.video_key
+    // Restore per-scene video clips
+    const restoredVideoUrls: Record<number, string> = {}
+    data.scenes.forEach((s, i) => {
+      const vk = (s as typeof s & { video_key?: string | null }).video_key
+      if (vk) restoredVideoUrls[i] = `/api/assets/${vk}`
+    })
+    if (Object.keys(restoredVideoUrls).length) sceneVideoUrls.value = restoredVideoUrls
     return true
   } catch {
     localStorage.removeItem('bm_active_session')
@@ -858,8 +865,8 @@ async function generateSceneFrames(index: number) {
     await ensureSceneFramePrompts(scene) // always generates 3 AI pose prompts
     let scenePageRef: string | null = null
     const charDesc = characterDescriptionForPrompt()
-    // image mode: render all 3 poses [0,1,2]; video mode: render only first+last [0,2]
-    const poseIndices = projectMode.value === 'video' ? [0, 2] : [0, 1, 2]
+    // image mode: render all 3 poses [0,1,2]; video mode: only opening shot [0]
+    const poseIndices = projectMode.value === 'video' ? [0] : [0, 1, 2]
     for (let i = 0; i < poseIndices.length; i++) {
       const fi = poseIndices[i]
       const pose = scene.framePrompts?.[fi]?.trim()
@@ -887,7 +894,7 @@ async function generateSceneFrames(index: number) {
       if (i === 0) scenePageRef = await assetUrlToBase64(assetUrl)
       await persistSceneFrames(index)
     }
-    const label = projectMode.value === 'video' ? '2 images' : `${FRAMES_PER_SCENE} pages`
+    const label = projectMode.value === 'video' ? '1 image' : `${FRAMES_PER_SCENE} pages`
     showToastMsg(`Scene ${index + 1}: ${label} ready`)
   } catch (e: unknown) {
     showToastMsg(`Scene ${index + 1}: ${(e as Error).message}`, 'error')
@@ -1590,9 +1597,13 @@ async function generateSceneActualVideo(index: number) {
         sizing_strategy: 'maintain_aspect_ratio',
       },
     })
-    const videoClipUrl = await pollReplicatePrediction(id, `/api/image/${id}`, 'Video generation failed', 180)
+    const replicateVideoUrl = await pollReplicatePrediction(id, `/api/image/${id}`, 'Video generation failed', 180)
+    const { assetUrl: videoClipUrl, key: videoKey } = await uploadAsset(replicateVideoUrl, 'video')
     sceneVideoUrls.value = { ...sceneVideoUrls.value, [index]: videoClipUrl }
     sceneVideoModal.value = { index, url: videoClipUrl }
+    if (sessionId.value && videoKey) {
+      await dbPatch(`/api/sessions/${sessionId.value}/scenes`, { position: index, video_key: videoKey })
+    }
     showToastMsg(`Scene ${index + 1}: video ready!`)
   } catch (e: unknown) {
     showToastMsg(`Scene ${index + 1}: ${(e as Error).message}`, 'error')
@@ -2062,7 +2073,7 @@ onMounted(async () => {
               @click="generateAllImages"
             >
               <Icon name="fa6-solid:wand-magic-sparkles" size="14" />
-              {{ generatingAll ? 'Generating…' : projectMode === 'video' ? 'Generate all (2 images per scene)' : `Generate all (${FRAMES_PER_SCENE} pages per scene)` }}
+              {{ generatingAll ? 'Generating…' : projectMode === 'video' ? 'Generate all (1 image per scene)' : `Generate all (${FRAMES_PER_SCENE} pages per scene)` }}
             </button>
             <button
               v-if="videoProject.scenes.some(s => s.frameUrls.length > 0)"
@@ -2214,18 +2225,9 @@ onMounted(async () => {
                   class="frame-viewport"
                   @click.stop="scene.frameUrls.length < neededImages && !scene.generating && generateSceneFrames(i)"
                 >
-                  <!-- Video mode: first + last image side by side -->
+                  <!-- Video mode: single input frame -->
                   <template v-if="projectMode === 'video' && scene.frameUrls.length">
-                    <div class="frame-split">
-                      <div class="frame-split-half">
-                        <img :src="scene.frameUrls[0]" class="frame-split-img" alt="" />
-                        <div class="frame-split-label">Opening</div>
-                      </div>
-                      <div class="frame-split-half">
-                        <img :src="scene.frameUrls[scene.frameUrls.length - 1]" class="frame-split-img" alt="" />
-                        <div class="frame-split-label">Finale</div>
-                      </div>
-                    </div>
+                    <img :src="scene.frameUrls[0]" class="frame-thumb" alt="" />
                   </template>
                   <!-- Image mode: single frame + thumbnail strip -->
                   <template v-else-if="scene.frameUrls.length">
@@ -2247,7 +2249,7 @@ onMounted(async () => {
                   </div>
                   <div v-else class="frame-placeholder clickable">
                     <Icon name="fa6-solid:layer-group" size="26" />
-                    <span>{{ projectMode === 'video' ? 'Generate 2 images' : `Generate ${FRAMES_PER_SCENE} pages` }}</span>
+                    <span>{{ projectMode === 'video' ? 'Generate image' : `Generate ${FRAMES_PER_SCENE} pages` }}</span>
                   </div>
                   <span class="frame-duration">{{ scene.duration }}s · {{ scene.frameUrls.length || 0 }}/{{ neededImages }}</span>
                 </div>

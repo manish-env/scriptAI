@@ -1,6 +1,6 @@
 import { uuid } from '../../../utils/helpers'
 
-interface Scene { title: string; narration: string; imagePrompt: string; duration: number; mood: string }
+interface Scene { title: string; narration: string; imagePrompt: string; duration: number; mood: string; video_key?: string | null }
 interface Env { DB: D1Database }
 
 export default defineEventHandler(async (event) => {
@@ -8,7 +8,7 @@ export default defineEventHandler(async (event) => {
   const session_id = getRouterParam(event, 'id')!
 
   if (event.method === 'POST') {
-    const { scenes }: { scenes: (Scene & { image_key?: string | null; frame_keys?: string | null })[] } = await readBody(event)
+    const { scenes }: { scenes: (Scene & { image_key?: string | null; frame_keys?: string | null; video_key?: string | null })[] } = await readBody(event)
     if (!scenes?.length) throw createError({ statusCode: 400, message: 'scenes required' })
     if (env.DB) {
       // Only fetch existing IDs so rows keep a stable UUID across syncs.
@@ -26,13 +26,14 @@ export default defineEventHandler(async (event) => {
       await env.DB.prepare('DELETE FROM scenes WHERE session_id = ?').bind(session_id).run()
 
       const stmt = env.DB.prepare(
-        'INSERT INTO scenes (id, session_id, position, title, narration, image_prompt, duration, mood, image_key, frame_keys) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO scenes (id, session_id, position, title, narration, image_prompt, duration, mood, image_key, frame_keys, video_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       await env.DB.batch(scenes.map((s, i) => {
         const id = idByPos.get(i) ?? uuid()
         const image_key = s.image_key ?? null
         const frame_keys = s.frame_keys ?? null
-        return stmt.bind(id, session_id, i, s.title, s.narration, s.imagePrompt, Math.min(10, Math.max(2, s.duration ?? 5)), s.mood ?? null, image_key, frame_keys)
+        const video_key = s.video_key ?? null
+        return stmt.bind(id, session_id, i, s.title, s.narration, s.imagePrompt, Math.min(10, Math.max(2, s.duration ?? 5)), s.mood ?? null, image_key, frame_keys, video_key)
       }))
 
       const { results } = await env.DB
@@ -44,12 +45,18 @@ export default defineEventHandler(async (event) => {
   }
 
   if (event.method === 'PATCH') {
-    const { position, image_key, frame_keys } = await readBody(event)
+    const { position, image_key, frame_keys, video_key } = await readBody(event)
     if (position === undefined || position === null) throw createError({ statusCode: 400, message: 'position required' })
-    if (env.DB && frame_keys !== undefined) {
-      await env.DB.prepare(
-        'UPDATE scenes SET image_key = ?, frame_keys = ? WHERE session_id = ? AND position = ?',
-      ).bind(image_key ?? null, frame_keys, session_id, position).run()
+    if (env.DB) {
+      if (video_key !== undefined) {
+        await env.DB.prepare(
+          'UPDATE scenes SET video_key = ? WHERE session_id = ? AND position = ?',
+        ).bind(video_key ?? null, session_id, position).run()
+      } else if (frame_keys !== undefined) {
+        await env.DB.prepare(
+          'UPDATE scenes SET image_key = ?, frame_keys = ? WHERE session_id = ? AND position = ?',
+        ).bind(image_key ?? null, frame_keys, session_id, position).run()
+      }
     }
     return { ok: true }
   }
