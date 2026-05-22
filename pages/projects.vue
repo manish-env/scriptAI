@@ -27,7 +27,7 @@ const creating = ref(false)
 const newPhotoInputEl = ref<HTMLInputElement | null>(null)
 const newPhotoPreview = ref<string | null>(null)
 const newPhotoBase64 = ref<string | null>(null)
-const form = reactive({ videoType: '', title: '', purpose: '' })
+const form = reactive({ videoType: '', title: '', purpose: '', mode: 'image' as 'image' | 'video' })
 
 const VIDEO_TYPES = [
   { value: 'personal-brand',    label: 'Personal Brand Story',        icon: 'fa6-solid:bullseye' },
@@ -41,7 +41,7 @@ const VIDEO_TYPES = [
 ]
 
 function openNewProject() {
-  form.videoType = ''; form.title = ''; form.purpose = ''
+  form.videoType = ''; form.title = ''; form.purpose = ''; form.mode = 'image'
   newPhotoPreview.value = null; newPhotoBase64.value = null
   showNewModal.value = true
 }
@@ -65,6 +65,7 @@ function createProject() {
     title: form.title.trim(),
     purpose: form.purpose.trim(),
     photoBase64: newPhotoBase64.value,
+    mode: form.mode,
   }))
   localStorage.removeItem('bm_active_session')
   navigateTo('/app')
@@ -285,6 +286,36 @@ function timeAgo(iso: string) {
             </div>
 
             <form class="np-form" @submit.prevent="createProject">
+
+              <div class="np-field">
+                <label>Generation Mode</label>
+                <div class="mode-toggle">
+                  <button
+                    type="button"
+                    class="mode-btn"
+                    :class="{ active: form.mode === 'image' }"
+                    @click="form.mode = 'image'"
+                  >
+                    <Icon name="fa6-solid:images" size="16" class="mode-icon" />
+                    <div class="mode-text">
+                      <div class="mode-name">Image Mode</div>
+                      <div class="mode-desc">Flipbook frames assembled into video</div>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    class="mode-btn"
+                    :class="{ active: form.mode === 'video' }"
+                    @click="form.mode = 'video'"
+                  >
+                    <Icon name="fa6-solid:film" size="16" class="mode-icon" />
+                    <div class="mode-text">
+                      <div class="mode-name">Video Mode</div>
+                      <div class="mode-desc">AI-generated real video per scene (6s max)</div>
+                    </div>
+                  </button>
+                </div>
+              </div>
 
               <div class="np-field">
                 <label>Video Type <span class="req">*</span></label>
@@ -655,6 +686,37 @@ function timeAgo(iso: string) {
   background: rgba(124,92,252,0.1);
   color: var(--text);
 }
+
+.mode-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.mode-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--bg3);
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  color: var(--text2);
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font);
+  transition: all 0.2s;
+}
+.mode-btn:hover { border-color: rgba(124,92,252,0.45); color: var(--text); }
+.mode-btn.active {
+  border-color: var(--accent);
+  background: rgba(124,92,252,0.08);
+  color: var(--text);
+}
+.mode-icon { flex-shrink: 0; }
+.mode-btn.active .mode-icon { color: var(--accent); }
+.mode-text { min-width: 0; }
+.mode-name { font-size: 13px; font-weight: 700; }
+.mode-desc { font-size: 11px; color: var(--text2); margin-top: 2px; line-height: 1.3; }
 
 .photo-zone {
   background: var(--bg3); border: 1px dashed var(--border);

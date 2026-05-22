@@ -192,6 +192,7 @@ const messages = ref<Message[]>([])
 const videoProject = reactive({ title: '', topic: '', characterDescription: '', scenes: [] as Scene[] })
 const userId = ref<string | null>(null)
 const sessionId = ref<string | null>(null)
+const projectMode = ref<'image' | 'video'>('image')
 const toast = reactive({ show: false, message: '', type: 'success' })
 
 const projectSetup = reactive({ videoType: '', projectTitle: '', projectPurpose: '' })
@@ -252,9 +253,11 @@ const VIDEO_TYPE_CONFIG: Record<string, { label: string; persona: string; firstQ
 // ── Computed ───────────────────────────────────────────────────────────────
 const canStart = computed(() => profile.name.trim() && profile.niche.trim())
 const FRAMES_PER_SCENE = 3
+// In video mode only 2 images per scene (first + last pose); image mode uses all 3
+const neededImages = computed(() => projectMode.value === 'video' ? 2 : FRAMES_PER_SCENE)
 const allImagesReady = computed(() =>
   videoProject.scenes.length > 0
-  && videoProject.scenes.every(s => s.frameUrls.length >= FRAMES_PER_SCENE || !!s.imageUrl),
+  && videoProject.scenes.every(s => s.frameUrls.length >= neededImages.value || !!s.imageUrl),
 )
 const totalDuration = computed(() => videoProject.scenes.reduce((sum, s) => sum + (s.duration || 5), 0))
 const selectedSceneIndex = ref(0)
@@ -452,6 +455,8 @@ async function persistSceneFrames(sceneIndex: number) {
 // ── Load existing session from D1 ──────────────────────────────────────────
 async function loadSession(id: string) {
   try {
+    const storedMode = localStorage.getItem(`bm_session_mode_${id}`)
+    if (storedMode === 'video') projectMode.value = 'video'
     const data = await $fetch<DbSession>(`/api/sessions/${id}`)
     if (!data) return false
 
@@ -827,9 +832,9 @@ async function generateAllImages() {
   try {
     await ensureHeroCaricature()
     for (const [i, scene] of videoProject.scenes.entries()) {
-      if (scene.frameUrls.length < FRAMES_PER_SCENE) await generateSceneFrames(i)
+      if (scene.frameUrls.length < neededImages.value) await generateSceneFrames(i)
     }
-    showToastMsg('All scene pages ready!')
+    showToastMsg(projectMode.value === 'video' ? 'All scene images ready!' : 'All scene pages ready!')
   } catch (e: unknown) {
     showToastMsg((e as Error).message || 'Generation failed', 'error')
   } finally {
@@ -839,7 +844,8 @@ async function generateAllImages() {
 
 async function generateSceneFrames(index: number) {
   const scene = videoProject.scenes[index]
-  if (scene.generating || scene.frameUrls.length >= FRAMES_PER_SCENE) return
+  const needed = neededImages.value
+  if (scene.generating || scene.frameUrls.length >= needed) return
   scene.generating = true
   scene.frameUrls = []
   scene.imageUrl = null
@@ -847,18 +853,23 @@ async function generateSceneFrames(index: number) {
     await ensureHeroCaricature()
     const photoB64 = requirePhotoBase64()
     scene.generatingLabel = 'Planning poses…'
-    await ensureSceneFramePrompts(scene)
+    await ensureSceneFramePrompts(scene) // always generates 3 AI pose prompts
     let scenePageRef: string | null = null
     const charDesc = characterDescriptionForPrompt()
-    for (let fi = 0; fi < FRAMES_PER_SCENE; fi++) {
+    // image mode: render all 3 poses [0,1,2]; video mode: render only first+last [0,2]
+    const poseIndices = projectMode.value === 'video' ? [0, 2] : [0, 1, 2]
+    for (let i = 0; i < poseIndices.length; i++) {
+      const fi = poseIndices[i]
       const pose = scene.framePrompts?.[fi]?.trim()
       if (!pose) throw new Error('Frame prompts missing for this scene')
-      scene.generatingLabel = fi === 0 ? `Page 1/${FRAMES_PER_SCENE} (new scene)` : `Page ${fi + 1}/${FRAMES_PER_SCENE} (pose)`
+      if (projectMode.value === 'video') {
+        scene.generatingLabel = i === 0 ? 'Opening shot…' : 'Final pose…'
+      } else {
+        scene.generatingLabel = i === 0 ? `Page 1/${FRAMES_PER_SCENE} (new scene)` : `Page ${i + 1}/${FRAMES_PER_SCENE} (pose)`
+      }
       let replicateUrl: string
-      if (fi === 0) {
-        // Use the hero caricature (already in the correct illustration style) as the
-        // reference image so Kontext inherits the style and only changes the scene.
-        // Fall back to raw photo if hero hasn't been generated yet.
+      if (i === 0) {
+        // Use hero caricature as style reference; fall back to raw photo
         const refB64 = profile.heroBase64 ?? photoB64
         replicateUrl = await runKontextEdit(
           buildSceneEstablishPromptKontext(scene.imagePrompt, charDesc, pose, scene.mood),
@@ -871,11 +882,11 @@ async function generateSceneFrames(index: number) {
       const { assetUrl } = await uploadAsset(replicateUrl, 'scene_image')
       scene.frameUrls.push(assetUrl)
       scene.imageUrl = scene.frameUrls[0]
-      if (fi === 0) scenePageRef = await assetUrlToBase64(assetUrl)
-      // Persist after every frame so a partial set survives if generation fails mid-way
+      if (i === 0) scenePageRef = await assetUrlToBase64(assetUrl)
       await persistSceneFrames(index)
     }
-    showToastMsg(`Scene ${index + 1}: ${FRAMES_PER_SCENE} frames ready`)
+    const label = projectMode.value === 'video' ? '2 images' : `${FRAMES_PER_SCENE} pages`
+    showToastMsg(`Scene ${index + 1}: ${label} ready`)
   } catch (e: unknown) {
     showToastMsg(`Scene ${index + 1}: ${(e as Error).message}`, 'error')
   } finally {
@@ -1549,6 +1560,42 @@ async function assembleSceneVideo(index: number) {
   }
 }
 
+async function generateSceneActualVideo(index: number) {
+  const scene = videoProject.scenes[index]
+  if (!scene || !scene.frameUrls.length) {
+    showToastMsg('Generate images for this scene first', 'error')
+    return
+  }
+  if (sceneVideoUrls.value[index]) {
+    sceneVideoModal.value = { index, url: sceneVideoUrls.value[index] }
+    return
+  }
+  if (sceneVideoLoading.value !== -1) return
+  sceneVideoLoading.value = index
+  showToastMsg(`Scene ${index + 1}: generating AI video…`)
+  try {
+    const frameUrl = scene.frameUrls[0]
+    const absoluteUrl = frameUrl.startsWith('http')
+      ? frameUrl
+      : `${window.location.origin}${frameUrl}`
+    const id = await startImagePrediction({
+      model: REPLICATE_MODELS.videoI2V,
+      input: {
+        prompt: `${scene.narration} ${scene.mood} mood, cinematic motion`,
+        first_frame_image: absoluteUrl,
+      },
+    })
+    const videoClipUrl = await pollReplicatePrediction(id, `/api/image/${id}`, 'Video generation failed', 180)
+    sceneVideoUrls.value = { ...sceneVideoUrls.value, [index]: videoClipUrl }
+    sceneVideoModal.value = { index, url: videoClipUrl }
+    showToastMsg(`Scene ${index + 1}: video ready!`)
+  } catch (e: unknown) {
+    showToastMsg(`Scene ${index + 1}: ${(e as Error).message}`, 'error')
+  } finally {
+    sceneVideoLoading.value = -1
+  }
+}
+
 async function regenerateSceneFrames(index: number) {
   const scene = videoProject.scenes[index]
   if (!scene || scene.generating) return
@@ -1707,6 +1754,9 @@ function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
 async function startNewProjectChat() {
   await ensureUser()
   await ensureSession()
+  if (sessionId.value) {
+    localStorage.setItem(`bm_session_mode_${sessionId.value}`, projectMode.value)
+  }
   screen.value = 'chat'
   messages.value = []
 
@@ -1774,8 +1824,9 @@ onMounted(async () => {
       localStorage.removeItem('bm_new_project')
       try {
         const setup = JSON.parse(newProjectRaw) as {
-          videoType: string; title: string; purpose: string; photoBase64: string | null
+          videoType: string; title: string; purpose: string; photoBase64: string | null; mode?: string
         }
+        projectMode.value = setup.mode === 'video' ? 'video' : 'image'
         projectSetup.videoType = setup.videoType
         projectSetup.projectTitle = setup.title
         projectSetup.projectPurpose = setup.purpose
@@ -1909,8 +1960,8 @@ onMounted(async () => {
                     <div class="scene-mini-info">
                       <div class="scene-mini-title">{{ s.title }}</div>
                       <div class="scene-mini-status">
-                        <span class="status-dot" :class="s.frameUrls.length >= FRAMES_PER_SCENE ? 'done' : s.generating ? 'loading' : 'pending'" />
-                        {{ s.frameUrls.length >= FRAMES_PER_SCENE ? 'Ready' : s.generating ? 'Generating…' : 'Pending' }}
+                        <span class="status-dot" :class="s.frameUrls.length >= neededImages ? 'done' : s.generating ? 'loading' : 'pending'" />
+                        {{ s.frameUrls.length >= neededImages ? 'Ready' : s.generating ? 'Generating…' : 'Pending' }}
                       </div>
                     </div>
                   </div>
@@ -1967,6 +2018,9 @@ onMounted(async () => {
               <div class="chat-title">{{ videoProject.title || 'Storyboard' }}</div>
               <div class="chat-sub">
                 {{ videoProject.scenes.length }} scenes · {{ totalDuration }}s total
+                <span v-if="videoProject.scenes.length" class="mode-badge" :class="projectMode">
+                  {{ projectMode === 'video' ? 'Video Mode' : 'Image Mode' }}
+                </span>
               </div>
             </div>
           </div>
@@ -2003,7 +2057,7 @@ onMounted(async () => {
               @click="generateAllImages"
             >
               <Icon name="fa6-solid:wand-magic-sparkles" size="14" />
-              {{ generatingAll ? 'Generating…' : `Generate all (${FRAMES_PER_SCENE} pages per scene)` }}
+              {{ generatingAll ? 'Generating…' : projectMode === 'video' ? 'Generate all (2 images per scene)' : `Generate all (${FRAMES_PER_SCENE} pages per scene)` }}
             </button>
             <button
               v-if="videoProject.scenes.some(s => s.frameUrls.length > 0)"
@@ -2140,22 +2194,36 @@ onMounted(async () => {
                 v-for="(scene, i) in videoProject.scenes"
                 :key="i"
                 class="storyboard-frame"
-                :class="{ active: selectedSceneIndex === i, done: scene.frameUrls.length >= FRAMES_PER_SCENE, loading: scene.generating }"
+                :class="{ active: selectedSceneIndex === i, done: scene.frameUrls.length >= neededImages, loading: scene.generating }"
                 @click="selectedSceneIndex = i"
               >
                 <div class="frame-connector" v-if="i > 0" />
                 <div class="frame-head">
                   <span class="frame-num">{{ String(i + 1).padStart(2, '0') }}</span>
                   <span class="frame-title">{{ scene.title }}</span>
-                  <span class="frame-status" :class="scene.frameUrls.length >= FRAMES_PER_SCENE ? 'done' : scene.generating ? 'loading' : 'pending'">
+                  <span class="frame-status" :class="scene.frameUrls.length >= neededImages ? 'done' : scene.generating ? 'loading' : 'pending'">
                     <span class="status-dot" />
                   </span>
                 </div>
                 <div
                   class="frame-viewport"
-                  @click.stop="scene.frameUrls.length < FRAMES_PER_SCENE && !scene.generating && generateSceneFrames(i)"
+                  @click.stop="scene.frameUrls.length < neededImages && !scene.generating && generateSceneFrames(i)"
                 >
-                  <template v-if="scene.frameUrls.length">
+                  <!-- Video mode: first + last image side by side -->
+                  <template v-if="projectMode === 'video' && scene.frameUrls.length">
+                    <div class="frame-split">
+                      <div class="frame-split-half">
+                        <img :src="scene.frameUrls[0]" class="frame-split-img" alt="" />
+                        <div class="frame-split-label">Opening</div>
+                      </div>
+                      <div class="frame-split-half">
+                        <img :src="scene.frameUrls[scene.frameUrls.length - 1]" class="frame-split-img" alt="" />
+                        <div class="frame-split-label">Finale</div>
+                      </div>
+                    </div>
+                  </template>
+                  <!-- Image mode: single frame + thumbnail strip -->
+                  <template v-else-if="scene.frameUrls.length">
                     <img :src="scene.frameUrls[scene.frameUrls.length - 1]" class="frame-img" alt="" />
                     <div class="frame-strip">
                       <img
@@ -2170,13 +2238,13 @@ onMounted(async () => {
                   </template>
                   <div v-else-if="scene.generating" class="frame-placeholder">
                     <div class="spinner" />
-                    <span>{{ scene.generatingLabel || 'Creating frames…' }}</span>
+                    <span>{{ scene.generatingLabel || 'Creating images…' }}</span>
                   </div>
                   <div v-else class="frame-placeholder clickable">
                     <Icon name="fa6-solid:layer-group" size="26" />
-                    <span>Generate {{ FRAMES_PER_SCENE }} pages</span>
+                    <span>{{ projectMode === 'video' ? 'Generate 2 images' : `Generate ${FRAMES_PER_SCENE} pages` }}</span>
                   </div>
-                  <span class="frame-duration">{{ scene.duration }}s · {{ scene.frameUrls.length || 0 }}/{{ FRAMES_PER_SCENE }}</span>
+                  <span class="frame-duration">{{ scene.duration }}s · {{ scene.frameUrls.length || 0 }}/{{ neededImages }}</span>
                 </div>
                 <div class="frame-script-track">
                   <Icon name="fa6-solid:microphone" size="12" class="track-icon" />
@@ -2189,13 +2257,24 @@ onMounted(async () => {
                   <button
                     class="scene-action-btn"
                     :disabled="scene.generating || generatingAll || sceneVideoLoading !== -1"
-                    @click="scene.frameUrls.length >= FRAMES_PER_SCENE ? regenerateSceneFrames(i) : generateSceneFrames(i)"
+                    @click="scene.frameUrls.length >= neededImages ? regenerateSceneFrames(i) : generateSceneFrames(i)"
                   >
                     <Icon :name="scene.generating ? 'fa6-solid:spinner' : 'fa6-solid:image'" size="11" :class="{ spin: scene.generating }" />
-                    {{ scene.generating ? (scene.generatingLabel || 'Generating…') : scene.frameUrls.length >= FRAMES_PER_SCENE ? 'Regenerate' : 'Generate images' }}
+                    {{ scene.generating ? (scene.generatingLabel || 'Generating…') : scene.frameUrls.length >= neededImages ? 'Regenerate' : 'Generate images' }}
                   </button>
+                  <!-- Video mode: generate actual AI video clip -->
                   <button
-                    v-if="scene.frameUrls.length"
+                    v-if="projectMode === 'video' && scene.frameUrls.length"
+                    class="scene-action-btn accent"
+                    :disabled="sceneVideoLoading !== -1"
+                    @click="generateSceneActualVideo(i)"
+                  >
+                    <Icon :name="sceneVideoLoading === i ? 'fa6-solid:spinner' : sceneVideoUrls[i] ? 'fa6-solid:circle-play' : 'fa6-solid:film'" size="11" :class="{ spin: sceneVideoLoading === i }" />
+                    {{ sceneVideoLoading === i ? 'Generating…' : sceneVideoUrls[i] ? 'Play video' : 'Generate video' }}
+                  </button>
+                  <!-- Image mode: preview canvas clip -->
+                  <button
+                    v-else-if="scene.frameUrls.length"
                     class="scene-action-btn accent"
                     :disabled="sceneVideoLoading === i"
                     @click="assembleSceneVideo(i)"
@@ -2219,7 +2298,7 @@ onMounted(async () => {
                 :key="'tl-' + i"
                 class="timeline-clip"
                 :style="{ flex: `0 0 ${timelineWidth(scene)}` }"
-                :class="{ active: selectedSceneIndex === i, done: scene.frameUrls.length >= FRAMES_PER_SCENE }"
+                :class="{ active: selectedSceneIndex === i, done: scene.frameUrls.length >= neededImages }"
                 @click="selectedSceneIndex = i"
               >
                 <span class="clip-num">{{ i + 1 }}</span>
@@ -3016,6 +3095,54 @@ onMounted(async () => {
 .cloning-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); }
 .voice-badge { color: var(--success) !important; border-color: rgba(34, 197, 94, 0.35) !important; }
 .voice-icon-active { color: var(--success); }
+
+/* Mode badge in toolbar */
+.mode-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+.mode-badge.image { background: rgba(124,92,252,0.14); color: var(--accent); }
+.mode-badge.video { background: rgba(239,68,68,0.14); color: var(--error); }
+
+/* Video mode: split frame view (first + last image side by side) */
+.frame-split {
+  width: 100%;
+  height: 100%;
+  display: flex;
+}
+.frame-split-half {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+.frame-split-half:first-child { border-right: 1px solid rgba(255,255,255,0.1); }
+.frame-split-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.frame-split-label {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(255,255,255,0.8);
+  background: rgba(0,0,0,0.6);
+  padding: 3px 0;
+}
 
 /* Per-scene action buttons */
 .frame-actions {
