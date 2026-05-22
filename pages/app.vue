@@ -1579,7 +1579,7 @@ async function generateSceneActualVideo(index: number) {
       ? frameUrl
       : `${window.location.origin}${frameUrl}`
     const id = await startImagePrediction({
-      model: REPLICATE_MODELS.videoI2V,
+      version: REPLICATE_MODELS.videoI2VVersion,
       input: {
         image: absoluteUrl,
         prompt: `${scene.narration} ${scene.mood} mood, cinematic motion`,

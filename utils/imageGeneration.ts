@@ -3,8 +3,8 @@
 export const REPLICATE_MODELS = {
   /** Pose edits, scene placement, and hero stylization — single model for all frames */
   kontext: 'black-forest-labs/flux-kontext-pro',
-  /** Image-to-video generation for Video Mode scenes (~5s clips, ~$0.05/run) */
-  videoI2V: 'wavespeedai/wan-2.1-i2v-480p',
+  /** Image-to-video generation for Video Mode scenes (~5s clips) — version hash required */
+  videoI2VVersion: 'e2870aa4965fd9ddfd87c16a3c8ab952c18e745e63f3f3b123c2dc8b538ad2b5',
 } as const
 
 /** Single source of truth for art style — used in every prompt so every frame looks the same */
