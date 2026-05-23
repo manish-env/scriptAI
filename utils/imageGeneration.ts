@@ -3,9 +3,10 @@
 export const REPLICATE_MODELS = {
   /** Pose edits, scene placement, and hero stylization */
   kontext: 'black-forest-labs/flux-kontext-pro',
-  /** SadTalker — still image + audio → lip-synced talking head video */
-  lipSync: 'cjwbw/sadtalker',
 } as const
+
+/** SadTalker version hash — uses /v1/predictions (version endpoint), not /v1/models */
+export const SADTALKER_VERSION = 'a519cc0cfebaaeade068b23899165a11ec76aaa1d2b313d40d214f204ec957a3'
 
 /** Single source of truth for art style — used in every prompt so every frame looks the same */
 export const ILLUSTRATION_STYLE =

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {
-  REPLICATE_MODELS, imageDataUri, pickPollOutput,
+  REPLICATE_MODELS, SADTALKER_VERSION, imageDataUri, pickPollOutput,
   buildHeroPrompt, buildSceneEstablishPromptKontext, buildPoseEditPrompt,
 } from '~/utils/imageGeneration'
 
@@ -447,7 +447,7 @@ async function generateSceneVideo(index: number) {
     const absAudioUrl = absUrl(audioUrl)
 
     const id = await startPrediction({
-      model: REPLICATE_MODELS.lipSync,
+      version: SADTALKER_VERSION,
       input: {
         source_image: imageUrl,
         driven_audio: absAudioUrl,
@@ -969,7 +969,8 @@ onMounted(async () => {
 }
 .img-slot.filled { cursor:zoom-in; border-color:var(--border); }
 .img-slot.filled:hover { border-color:var(--accent); }
-.img-slot img, .img-slot video { width:100%; height:100%; object-fit:cover; display:block; }
+.img-slot img { width:100%; height:100%; object-fit:contain; display:block; background:#000; }
+.img-slot video { width:100%; height:100%; object-fit:cover; display:block; }
 .img-placeholder { display:flex; flex-direction:column; align-items:center; gap:6px; color:var(--text2); font-size:11px; font-weight:600; }
 .video-slot { position:relative; cursor:pointer; }
 .play-overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,0.35); color:#fff; opacity:0; transition:opacity 0.15s; }
