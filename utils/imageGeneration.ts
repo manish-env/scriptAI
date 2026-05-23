@@ -1,10 +1,10 @@
 /** Replicate models + illustration prompts for scene / flipbook generation */
 
 export const REPLICATE_MODELS = {
-  /** Pose edits, scene placement, and hero stylization — single model for all frames */
+  /** Pose edits, scene placement, and hero stylization */
   kontext: 'black-forest-labs/flux-kontext-pro',
-  /** Stable Video Diffusion XT — ~$0.003-0.015/run, 25 frames @ 5fps ≈ 5s */
-  videoI2VVersion: '3f0457e4619daac51203dedb472816fd4af51f3149fa7a9e0b5ffcf1b8172438',
+  /** SadTalker — still image + audio → lip-synced talking head video */
+  lipSync: 'cjwbw/sadtalker',
 } as const
 
 /** Single source of truth for art style — used in every prompt so every frame looks the same */
