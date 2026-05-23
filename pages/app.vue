@@ -559,9 +559,29 @@ async function startNewProjectChat() {
   localStorage.removeItem('bm_new_project')
   try {
     const setup = JSON.parse(stored)
-    projectSetup.videoType = setup.videoType ?? ''; projectSetup.projectTitle = setup.title ?? ''; projectSetup.projectPurpose = setup.purpose ?? ''
+    projectSetup.videoType = setup.videoType ?? ''
+    projectSetup.projectTitle = setup.title ?? ''
+    projectSetup.projectPurpose = setup.purpose ?? ''
+    // Photo uploaded in project popup — load it into profile immediately
+    if (setup.photoBase64 && !profile.photoBase64) {
+      profile.photoBase64 = setup.photoBase64
+      profile.photoUrl = `data:image/jpeg;base64,${setup.photoBase64}`
+    }
   } catch { return false }
   await ensureUser(); await ensureSession()
+  // Upload photo to R2 if we got one from the project popup and don't already have it saved
+  if (profile.photoBase64 && !profile.photoUrl?.startsWith('/api/assets/') && userId.value) {
+    try {
+      const res = await $fetch<{ key: string | null; assetUrl: string }>('/api/upload', {
+        method: 'POST',
+        body: { base64: `data:image/jpeg;base64,${profile.photoBase64}`, type: 'photo', user_id: userId.value },
+      })
+      if (res.key) {
+        profile.photoUrl = res.assetUrl
+        await dbPatch('/api/user', { id: userId.value, photo_key: res.key })
+      }
+    } catch { /* non-fatal — photo still in memory */ }
+  }
   const cfg = VIDEO_TYPE_CONFIG[projectSetup.videoType]
   const greeting = [
     `I'm your AI **${cfg?.label ?? 'video'} creator** — let's make **"${projectSetup.projectTitle}"** exceptional.`,
