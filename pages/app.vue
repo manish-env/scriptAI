@@ -97,7 +97,12 @@ function stripForContext(text: string) {
 }
 
 function buildContextMessages() {
-  return messages.value.map(m => ({ role: m.role, content: m.role === 'assistant' ? stripForContext(m.content) : m.content }))
+  const msgs = messages.value.map(m => ({ role: m.role, content: m.role === 'assistant' ? stripForContext(m.content) : m.content }))
+  // Claude API requires the last message to be from 'user'
+  if (msgs.length && msgs[msgs.length - 1].role === 'assistant') {
+    msgs.push({ role: 'user', content: 'Please proceed.' })
+  }
+  return msgs
 }
 
 function findScriptInChat(): VideoScriptJson | null {
